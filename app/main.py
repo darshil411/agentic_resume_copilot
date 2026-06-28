@@ -2,27 +2,32 @@ import os
 import sys
 from dotenv import load_dotenv
 
+# Ensure root directory is in path and load env variables BEFORE importing anything else
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-# FIX: Load environment variables BEFORE importing the graph or running anything
 env_path = os.path.join(ROOT_DIR, ".env")
 load_dotenv(dotenv_path=env_path)
 
-from app.graph.builder import graph
+from fastapi import FastAPI
+from app.api.routes import router
 
-# Dynamically build the absolute path to the data folder inside your project root
-RESUME_PATH = os.path.join(ROOT_DIR, "data", "resume.pdf")
+# Initialize FastAPI App
+app = FastAPI(
+    title="AI Resume Copilot API",
+    description="Backend orchestration system using LangGraph and FastAPI.",
+    version="1.0.0"
+)
 
-initial_state = {
-    "resume_file_path": RESUME_PATH,
-    "job_description_text": """
-    Looking for Python backend engineer with FastAPI,
-    LangGraph, AI workflow experience and vector DB knowledge.
-    """
-}
+# Register API routes
+app.include_router(router, prefix="/api/v1")
 
-result = graph.invoke(initial_state)
+@app.get("/")
+def health_check():
+    return {"status": "healthy", "service": "AI Resume Copilot backend"}
 
-print(result)
+if __name__ == "__main__":
+    import uvicorn
+    # Run the server locally on port 8000
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

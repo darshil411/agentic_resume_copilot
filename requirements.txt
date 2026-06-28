@@ -1,6 +1,7 @@
 langgraph
 langchain
 langchain-core
+langgraph-checkpoint-sqlite
 
 langchain-google-genai
 langchain-groq

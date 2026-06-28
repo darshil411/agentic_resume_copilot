@@ -1,0 +1,125 @@
+from typing import Dict, Any
+import fitz  # PyMuPDF
+from langchain_core.messages import SystemMessage, HumanMessage
+from pydantic import ValidationError
+
+from app.graph.state.global_state import GlobalGraphState
+from app.models.resume import StructuredResume
+from app.models.jd import JDAnalysis
+from app.models.ats import ATSReport
+from app.utils.llm_factory import get_llm
+
+def resume_upload_node(state: GlobalGraphState) -> Dict[str, Any]:
+    """
+    Initializes the workflow. 
+    State must already contain resume_file_path and job_description_text.
+    """
+    return {"workflow_logs": ["Started resume_upload_node."]}
+
+def resume_extraction_node(state: GlobalGraphState) -> Dict[str, Any]:
+    """
+    Deterministic node: Extracts text from the uploaded PDF.
+    """
+    file_path = state.get("resume_file_path")
+    if not file_path:
+        return {"errors": ["No resume_file_path provided for extraction."]}
+        
+    try:
+        doc = fitz.open(file_path)
+        text = "\n".join(page.get_text("text") for page in doc)
+        return {
+            "resume_text": text,
+            "workflow_logs": ["Successfully extracted text from resume PDF."]
+        }
+    except Exception as e:
+        return {"errors": [f"resume_extraction_node failed: {str(e)}"]}
+
+def resume_structuring_node(state: GlobalGraphState) -> Dict[str, Any]:
+    """
+    LLM node: Converts raw resume text into the StructuredResume Pydantic model.
+    """
+    resume_text = state.get("resume_text", "")
+    if not resume_text:
+        return {"errors": ["No resume_text found to structure."]}
+        
+    llm = get_llm("openrouter", model="meta-llama/llama-3-8b-instruct:free").with_structured_output(StructuredResume)
+    
+    prompt = f"Convert the following raw resume text into a structured JSON format.\n\nResume Text:\n{resume_text}"
+    try:
+        structured_resume = llm.invoke([HumanMessage(content=prompt)])
+        return {
+            "original_resume": structured_resume,
+            "workflow_logs": ["Successfully structured resume via LLM."]
+        }
+    except ValidationError as e:
+        # Schema validation error routing
+        return {"errors": [f"SchemaValidationError: {str(e)}"]}
+    except Exception as e:
+        return {"errors": [f"resume_structuring_node failed: {str(e)}"]}
+
+def jd_analysis_node(state: GlobalGraphState) -> Dict[str, Any]:
+    """
+    LLM node: Analyzes the Job Description text.
+    """
+    jd_text = state.get("job_description_text", "")
+    if not jd_text:
+        return {"errors": ["No job_description_text found."]}
+        
+    llm = get_llm("gemini", model="gemini-1.5-flash").with_structured_output(JDAnalysis)
+    prompt = f"Analyze the following Job Description and extract the key requirements, skills, and tools.\n\nJD:\n{jd_text}"
+    
+    try:
+        jd_analysis = llm.invoke([HumanMessage(content=prompt)])
+        return {
+            "jd_analysis": jd_analysis,
+            "workflow_logs": ["Successfully analyzed job description."]
+        }
+    except Exception as e:
+        return {"errors": [f"jd_analysis_node failed: {str(e)}"]}
+
+def ats_evaluation_node(state: GlobalGraphState) -> Dict[str, Any]:
+    """
+    Hybrid node: Deterministic exact match + LLM semantic match.
+    Reads: original_resume, jd_analysis
+    Writes: ats_report
+    """
+    resume = state.get("original_resume")
+    jd_analysis = state.get("jd_analysis")
+    
+    if not resume or not jd_analysis:
+        return {"errors": ["Missing resume or jd_analysis for ATS evaluation."]}
+    
+    # 1. Deterministic Layer
+    resume_skills_lower = set(s.lower() for s in resume.skills)
+    jd_skills_lower = set(s.lower() for s in jd_analysis.required_skills)
+    
+    exact_matches = resume_skills_lower.intersection(jd_skills_lower)
+    missing_skills = list(jd_skills_lower - resume_skills_lower)
+    
+    deterministic_score = len(exact_matches) / max(len(jd_skills_lower), 1) * 50.0  # Max 50 points from exact
+    
+    # 2. Semantic Layer (LLM)
+    llm = get_llm("groq", model="llama3-8b-8192").with_structured_output(ATSReport)
+    
+    prompt = f"""
+    Evaluate the resume against the job description.
+    Resume Skills: {resume.skills}
+    Resume Projects: {[p.title for p in resume.projects]}
+    JD Required Skills: {jd_analysis.required_skills}
+    JD Responsibilities: {jd_analysis.responsibilities}
+    
+    The deterministic keyword match found these missing skills: {missing_skills}.
+    Assess the semantic fit (transferable skills, contextual alignment).
+    Provide a final ATSReport. The score should be out of 100, incorporating the deterministic findings.
+    """
+    
+    try:
+        ats_report = llm.invoke([HumanMessage(content=prompt)])
+        # Combine the deterministic findings into the final report where applicable
+        ats_report.matched_skills = list(set(ats_report.matched_skills + list(exact_matches)))
+        return {
+            "ats_report": ats_report,
+            "workflow_logs": ["Successfully ran hybrid ATS evaluation."]
+        }
+    except Exception as e:
+        return {"errors": [f"ats_evaluation_node failed: {str(e)}"]}
