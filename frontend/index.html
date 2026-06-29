@@ -138,7 +138,9 @@
                         }, 1000);
                     }
                 } catch (err) {
-                    showToast("Failed to start workflow. Check backend connection.", "error");
+                    const errMsg = err.message || "Unknown error. Check the terminal for details.";
+                    showToast("Failed to start workflow: " + errMsg, "error");
+                    console.error("Workflow start error:", err);
                     btn.innerHTML = originalText;
                     btn.disabled = false;
                 }

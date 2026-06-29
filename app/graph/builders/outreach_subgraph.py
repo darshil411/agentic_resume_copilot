@@ -1,13 +1,14 @@
 from langgraph.graph import StateGraph, END
 from app.graph.state.global_state import GlobalGraphState
-from app.graph.nodes.outreach_nodes import OutreachGraphState, generate_outreach_node
+from app.graph.nodes.outreach_nodes import generate_outreach_node
 
 def build_outreach_subgraph() -> StateGraph:
     """
     Builds the independent outreach generation branch.
     Depends only on the original_resume and jd_analysis.
+    Uses GlobalGraphState so outputs are written back to the parent graph's channels.
     """
-    builder = StateGraph(OutreachGraphState)
+    builder = StateGraph(GlobalGraphState)
     
     # Add Nodes
     builder.add_node("generate_outreach_node", generate_outreach_node)
@@ -17,5 +18,3 @@ def build_outreach_subgraph() -> StateGraph:
     builder.add_edge("generate_outreach_node", END)
     
     return builder.compile()
-
-outreach_subgraph = build_outreach_subgraph()

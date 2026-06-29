@@ -99,7 +99,7 @@ def ats_evaluation_node(state: GlobalGraphState) -> Dict[str, Any]:
     deterministic_score = len(exact_matches) / max(len(jd_skills_lower), 1) * 50.0  # Max 50 points from exact
     
     # 2. Semantic Layer (LLM)
-    llm = get_llm("groq", model="llama3-8b-8192").with_structured_output(ATSReport)
+    llm = get_llm("groq", model="llama-3.1-8b-instant").with_structured_output(ATSReport)
     
     prompt = f"""
     Evaluate the resume against the job description.

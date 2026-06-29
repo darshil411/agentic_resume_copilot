@@ -3,18 +3,14 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from app.graph.state.global_state import GlobalGraphState
-from app.graph.state.local_states import OutreachSubgraphState
 from app.utils.llm_factory import get_llm
-
-class OutreachGraphState(GlobalGraphState, OutreachSubgraphState):
-    pass
 
 class OutreachOutput(BaseModel):
     cold_emails: List[str] = Field(description="Cold email templates for recruiters or hiring managers")
     referrals: List[str] = Field(description="Messages asking for referrals")
     followups: List[str] = Field(description="Follow-up emails after an application or interview")
 
-def generate_outreach_node(state: OutreachGraphState) -> Dict[str, Any]:
+def generate_outreach_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     LLM Node: Generates outreach templates.
     Operates completely independently on the original resume and JD.

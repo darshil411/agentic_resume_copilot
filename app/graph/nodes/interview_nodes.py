@@ -3,18 +3,14 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from app.graph.state.global_state import GlobalGraphState
-from app.graph.state.local_states import InterviewSubgraphState
 from app.utils.llm_factory import get_llm
-
-class InterviewGraphState(GlobalGraphState, InterviewSubgraphState):
-    pass
 
 class InterviewPrepOutput(BaseModel):
     questions: List[str] = Field(description="List of technical and behavioral interview questions")
     experiences: List[str] = Field(description="Summary of likely interview experiences or round structure")
     roadmap: List[str] = Field(description="Step-by-step preparation roadmap")
 
-def generate_interview_prep_node(state: InterviewGraphState) -> Dict[str, Any]:
+def generate_interview_prep_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     LLM Node: Generates interview questions and prep material.
     Crucially, it uses `original_resume` to remain strictly independent of the resume optimization pipeline.

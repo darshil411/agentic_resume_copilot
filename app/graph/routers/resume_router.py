@@ -1,6 +1,6 @@
-from app.graph.nodes.resume_nodes import ResumeGraphState
+from app.graph.state.global_state import GlobalGraphState
 
-def route_after_approval(state: ResumeGraphState) -> str:
+def route_after_approval(state: GlobalGraphState) -> str:
     """
     Deterministic Router: Decides where to go after approval processing.
     It inspects the state variables and returns the name of the next node.

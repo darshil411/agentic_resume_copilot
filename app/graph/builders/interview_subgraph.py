@@ -1,13 +1,14 @@
 from langgraph.graph import StateGraph, END
 from app.graph.state.global_state import GlobalGraphState
-from app.graph.nodes.interview_nodes import InterviewGraphState, generate_interview_prep_node
+from app.graph.nodes.interview_nodes import generate_interview_prep_node
 
 def build_interview_subgraph() -> StateGraph:
     """
     Builds the independent interview preparation branch.
     Depends only on the original_resume and jd_analysis.
+    Uses GlobalGraphState so outputs are written back to the parent graph's channels.
     """
-    builder = StateGraph(InterviewGraphState)
+    builder = StateGraph(GlobalGraphState)
     
     # Add Nodes
     builder.add_node("generate_interview_prep_node", generate_interview_prep_node)
@@ -17,5 +18,3 @@ def build_interview_subgraph() -> StateGraph:
     builder.add_edge("generate_interview_prep_node", END)
     
     return builder.compile()
-
-interview_subgraph = build_interview_subgraph()

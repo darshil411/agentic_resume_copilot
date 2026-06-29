@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END
+from app.graph.state.global_state import GlobalGraphState
 from app.graph.nodes.resume_nodes import (
-    ResumeGraphState,
     optimize_section_node,
     approval_processing_node,
     commit_changes_node,
@@ -14,8 +14,9 @@ def build_resume_subgraph() -> StateGraph:
     """
     Builds the HITL Resume Optimization branch.
     Demonstrates interrupts, conditional routing, and deterministic commits.
+    Uses GlobalGraphState so all fields are accessible in the parent graph after fan-in.
     """
-    builder = StateGraph(ResumeGraphState)
+    builder = StateGraph(GlobalGraphState)
     
     # Add Nodes
     builder.add_node("optimize_section_node", optimize_section_node)
@@ -50,5 +51,3 @@ def build_resume_subgraph() -> StateGraph:
     
     # The `interrupt_before` is key for the HITL flow. The graph execution pauses here.
     return builder.compile(interrupt_before=["approval_processing_node"])
-
-resume_subgraph = build_resume_subgraph()

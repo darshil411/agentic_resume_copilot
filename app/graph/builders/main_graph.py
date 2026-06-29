@@ -22,7 +22,7 @@ def build_main_graph(checkpointer=None) -> StateGraph:
     Builds the main orchestration DAG.
     Demonstrates sequential foundation nodes followed by parallel fan-out to subgraphs.
     """
-    builder = StateGraph(GlobalGraphState, checkpointer=checkpointer)
+    builder = StateGraph(GlobalGraphState)
     
     # 1. Foundation Nodes
     builder.add_node("resume_upload_node", resume_upload_node)

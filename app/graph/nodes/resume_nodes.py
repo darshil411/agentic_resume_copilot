@@ -4,18 +4,13 @@ from pydantic import BaseModel, Field
 import copy
 
 from app.graph.state.global_state import GlobalGraphState
-from app.graph.state.local_states import ResumeSubgraphState
 from app.utils.llm_factory import get_llm
-
-# Since we want a typed state for the overall Resume Subgraph, we merge Global + ResumeSubgraphState
-class ResumeGraphState(GlobalGraphState, ResumeSubgraphState):
-    pass
 
 class ProposedChanges(BaseModel):
     new_content: str = Field(description="The proposed optimized text for the section")
     reasoning: str = Field(description="Why this change improves the ATS score or impact")
 
-def optimize_section_node(state: ResumeGraphState) -> Dict[str, Any]:
+def optimize_section_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     LLM Node: Proposes changes for a specific section based on ATS feedback.
     Crucially, this DOES NOT mutate the `optimized_resume` yet.
@@ -44,7 +39,7 @@ def optimize_section_node(state: ResumeGraphState) -> Dict[str, Any]:
     except Exception as e:
         return {"errors": [f"optimize_section_node failed: {str(e)}"]}
 
-def approval_processing_node(state: ResumeGraphState) -> Dict[str, Any]:
+def approval_processing_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     Processes the human-in-the-loop (HITL) approval input.
     """
@@ -63,7 +58,7 @@ def approval_processing_node(state: ResumeGraphState) -> Dict[str, Any]:
             "workflow_logs": [f"Human rejected changes. Feedback: {approval_state.get('feedback', '')}"]
         }
 
-def commit_changes_node(state: ResumeGraphState) -> Dict[str, Any]:
+def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     Deterministic Node: Mutates the `optimized_resume` only AFTER human approval.
     """
@@ -85,7 +80,7 @@ def commit_changes_node(state: ResumeGraphState) -> Dict[str, Any]:
         "workflow_logs": [f"Committed approved changes to {section}"]
     }
 
-def recompute_ats_node(state: ResumeGraphState) -> Dict[str, Any]:
+def recompute_ats_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     LLM Node: Recomputes the ATS score after optimizations to verify improvement.
     """
@@ -100,7 +95,7 @@ def recompute_ats_node(state: ResumeGraphState) -> Dict[str, Any]:
         "workflow_logs": ["Recomputed ATS score after committing changes."]
     }
 
-def resume_export_node(state: ResumeGraphState) -> Dict[str, Any]:
+def resume_export_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     Finalizes the resume pipeline by mocking an export path.
     """
