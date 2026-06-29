@@ -1,4 +1,4 @@
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START, END # pyright: ignore[reportMissingImports]
 from app.graph.state.global_state import GlobalGraphState
 from app.graph.nodes.foundation_nodes import (
     resume_upload_node,
@@ -17,12 +17,12 @@ from app.graph.builders.resume_subgraph import build_resume_subgraph
 from app.graph.builders.interview_subgraph import build_interview_subgraph
 from app.graph.builders.outreach_subgraph import build_outreach_subgraph
 
-def build_main_graph() -> StateGraph:
+def build_main_graph(checkpointer=None) -> StateGraph:
     """
     Builds the main orchestration DAG.
     Demonstrates sequential foundation nodes followed by parallel fan-out to subgraphs.
     """
-    builder = StateGraph(GlobalGraphState)
+    builder = StateGraph(GlobalGraphState, checkpointer=checkpointer)
     
     # 1. Foundation Nodes
     builder.add_node("resume_upload_node", resume_upload_node)
@@ -97,7 +97,7 @@ def build_main_graph() -> StateGraph:
     builder.add_edge("schema_validation_retry_node", "resume_structuring_node")
     builder.add_edge("escalation_node", END)
     
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 # This is the compiled graph that will be run with the checkpointer
 # It will be instantiated in the API or runner script

@@ -1,5 +1,5 @@
 from typing import List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field # pyright: ignore[reportMissingImports]
 
 class JDAnalysis(BaseModel):
     """
@@ -10,3 +10,6 @@ class JDAnalysis(BaseModel):
     keywords: List[str] = Field(default_factory=list, description="Important keywords or domain terms")
     tools: List[str] = Field(default_factory=list, description="Specific tools, software, or frameworks mentioned")
     experience_requirements: List[str] = Field(default_factory=list, description="Required years of experience or seniority level")
+    keywords: List[str] = Field(default_factory=list, description="Important keywords or domain terms")
+
+    role_summary: str

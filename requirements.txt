@@ -1,17 +1,26 @@
+# Orchestration & Tracing
 langgraph
 langchain
 langchain-core
+langchain-community
+langsmith
+
+# State Persistence
 langgraph-checkpoint-sqlite
 
+# LLM Providers
 langchain-google-genai
 langchain-groq
 langchain-openai
 
+# Search & Research
+tavily-python
+
+# Parsing & Data Validation
+pymupdf
 pydantic
 
-pymupdf
-
-python-dotenv
-
+# API & Environment
 fastapi
 uvicorn
+python-dotenv

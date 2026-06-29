@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Resume Copilot - Portal</title>
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="bg-white text-black min-h-screen flex items-center justify-center font-sans">
+    
+    <div class="max-w-xl w-full p-8">
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-navy mb-2">Career Copilot</h1>
+            <p class="text-gray-500">Upload your resume and drop in a job description to get started.</p>
+        </div>
+
+        <form id="uploadForm" class="space-y-6">
+            
+            <!-- Drag & Drop Zone -->
+            <div id="dropzone" class="border-dashed border-navy rounded-lg p-10 flex flex-col items-center justify-center cursor-pointer bg-white">
+                <svg class="w-12 h-12 text-navy mb-3 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                </svg>
+                <p class="text-navy font-medium pointer-events-none text-center">Click or drag PDF here to upload</p>
+                <p class="text-sm text-gray-400 mt-1 pointer-events-none">PDF only (max 5MB)</p>
+                <input type="file" id="resumeFile" accept=".pdf" class="hidden" required>
+                <!-- Show selected file name -->
+                <p id="fileNameDisplay" class="text-green font-semibold mt-3 hidden"></p>
+            </div>
+
+            <!-- Job Description Textarea -->
+            <div>
+                <label for="jobDescription" class="block text-sm font-medium text-navy mb-1">Job Description</label>
+                <textarea id="jobDescription" rows="4" class="w-full border border-gray-300 rounded-md shadow-sm focus:border-green focus:ring-green focus:outline-none p-3 text-black" placeholder="Paste the target job description here..." required></textarea>
+            </div>
+
+            <!-- Submit Button -->
+            <button type="submit" class="btn-primary w-full py-3 rounded-md font-bold text-lg flex items-center justify-center gap-2">
+                Generate Career Copilot
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg>
+            </button>
+        </form>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="js/api.js"></script>
+    <script src="js/ui_render.js"></script>
+    <script src="js/workflow.js"></script>
+    <script>
+        // Portal specific UI bindings
+        document.addEventListener('DOMContentLoaded', () => {
+            const dropzone = document.getElementById('dropzone');
+            const fileInput = document.getElementById('resumeFile');
+            const fileNameDisplay = document.getElementById('fileNameDisplay');
+            const form = document.getElementById('uploadForm');
+
+            // Drag and drop events
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropzone.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropzone.addEventListener(eventName, () => dropzone.classList.add('dragover'), false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropzone.addEventListener(eventName, () => dropzone.classList.remove('dragover'), false);
+            });
+
+            dropzone.addEventListener('drop', (e) => {
+                let dt = e.dataTransfer;
+                let files = dt.files;
+                handleFiles(files);
+            });
+
+            dropzone.addEventListener('click', () => fileInput.click());
+
+            fileInput.addEventListener('change', function() {
+                handleFiles(this.files);
+            });
+
+            function handleFiles(files) {
+                if (files.length > 0) {
+                    const file = files[0];
+                    if (file.type === "application/pdf") {
+                        // Actually attach it to the file input if dropped
+                        const dataTransfer = new DataTransfer();
+                        dataTransfer.items.add(file);
+                        fileInput.files = dataTransfer.files;
+                        
+                        fileNameDisplay.textContent = `Selected: ${file.name}`;
+                        fileNameDisplay.classList.remove('hidden');
+                    } else {
+                        showToast("Please upload a PDF file.", "error");
+                    }
+                }
+            }
+
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const file = fileInput.files[0];
+                const jd = document.getElementById('jobDescription').value;
+
+                if (!file || !jd) {
+                    showToast("Please provide both a resume and a job description.", "error");
+                    return;
+                }
+
+                // Show loading state on button
+                const btn = form.querySelector('button');
+                const originalText = btn.innerHTML;
+                btn.innerHTML = `<span class="animate-pulse">Starting Engine...</span>`;
+                btn.disabled = true;
+
+                try {
+                    const response = await startWorkflow(file, jd);
+                    if (response && response.thread_id) {
+                        showToast("Workflow started! Redirecting...", "success");
+                        // Store thread_id and redirect
+                        localStorage.setItem('copilot_thread_id', response.thread_id);
+                        setTimeout(() => {
+                            window.location.href = 'dashboard.html';
+                        }, 1000);
+                    }
+                } catch (err) {
+                    showToast("Failed to start workflow. Check backend connection.", "error");
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }
+            });
+        });
+    </script>
+</body>
+</html>

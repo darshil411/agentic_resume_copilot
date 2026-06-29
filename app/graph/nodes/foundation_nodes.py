@@ -42,7 +42,7 @@ def resume_structuring_node(state: GlobalGraphState) -> Dict[str, Any]:
     if not resume_text:
         return {"errors": ["No resume_text found to structure."]}
         
-    llm = get_llm("openrouter", model="meta-llama/llama-3-8b-instruct:free").with_structured_output(StructuredResume)
+    llm = get_llm("gemini").with_structured_output(StructuredResume)
     
     prompt = f"Convert the following raw resume text into a structured JSON format.\n\nResume Text:\n{resume_text}"
     try:

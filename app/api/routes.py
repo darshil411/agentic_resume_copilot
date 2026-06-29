@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel # pyright: ignore[reportMissingImports]
 from typing import Dict, Any, Optional
 import uuid
 
@@ -10,9 +10,7 @@ router = APIRouter()
 
 # Instantiate the graph with the checkpointer for persistent state
 checkpointer = get_checkpointer()
-app_graph = build_main_graph()
-# We must re-compile with the checkpointer to enable state persistence across API calls
-app_graph = build_main_graph().with_config({"checkpointer": checkpointer})
+app_graph = build_main_graph(checkpointer=checkpointer)
 
 class StartWorkflowRequest(BaseModel):
     resume_file_path: str

@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field # pyright: ignore[reportMissingImports]
 
 class Section(str, Enum):
     SUMMARY = "summary"
@@ -11,25 +11,51 @@ class Section(str, Enum):
     CERTIFICATIONS = "certifications"
 
 class Project(BaseModel):
-    title: str = Field(description="Title of the project")
-    description: str = Field(description="A brief summary of what the project is")
-    technologies: List[str] = Field(default_factory=list, description="Technologies and tools used in the project")
-    impact: Optional[str] = Field(None, description="Quantifiable impact or outcome of the project, if any")
+    title: str
+    description: str
+    tech_stack: List[str] = []
+    github_url: Optional[str] = None
+    live_url: Optional[str] = None
+
 
 class Experience(BaseModel):
-    company: str = Field(description="Name of the company or organization")
-    role: str = Field(description="Job title or role")
-    duration: str = Field(description="Duration of employment (e.g., 'Jan 2020 - Present')")
-    bullets: List[str] = Field(default_factory=list, description="List of achievements and responsibilities")
+    company: str
+    role: str
+    duration: Optional[str] = None
+    bullets: List[str] = []
+
+
+class Education(BaseModel):
+    college: str
+    degree: str
+    year: Optional[str] = None
+    cgpa: Optional[str] = None
+
+
+class StructuredSkills(BaseModel):
+    languages: List[str] = []
+    frameworks: List[str] = []
+    tools: List[str] = []
+    databases: List[str] = []
+    concepts: List[str] = []
+
 
 class StructuredResume(BaseModel):
-    """
-    Strongly typed schema representing a parsed and structured resume.
-    This serves as the canonical state for both the original and optimized resumes.
-    """
-    summary: str = Field(description="Professional summary or objective")
-    skills: List[str] = Field(default_factory=list, description="List of technical and soft skills")
-    projects: List[Project] = Field(default_factory=list, description="List of projects")
-    experience: List[Experience] = Field(default_factory=list, description="List of work experiences")
-    education: List[str] = Field(default_factory=list, description="List of educational qualifications")
-    certifications: List[str] = Field(default_factory=list, description="List of certifications")
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    city: Optional[str] = None
+
+    linkedin: Optional[str] = None
+    github: Optional[str] = None
+    portfolio: Optional[str] = None
+
+    summary: Optional[str] = None
+
+    skills: StructuredSkills
+
+    projects: List[Project] = []
+    experience: List[Experience] = []
+    education: List[Education] = []
+
+    certifications: List[str] = []
