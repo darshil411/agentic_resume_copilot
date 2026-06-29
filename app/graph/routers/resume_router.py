@@ -6,16 +6,20 @@ def route_after_approval(state: GlobalGraphState) -> str:
     It inspects the state variables and returns the name of the next node.
     No LLM is used here to ensure absolute predictability and safe checkpoint recovery.
     """
-    approval_state = state.get("approval_state", {})
-    approved = approval_state.get("approved", False)
+    # FIX 1: Use Pydantic dot-notation to get the current section and states
+    section = state.current_section or "summary"
+    approval_state = state.approval_state
     
-    if approved:
+    # FIX 2: Since approval_state IS a standard dictionary, we use .get() here.
+    # We check the specific section's status (e.g., {"projects": "approved"})
+    status = approval_state.get(section, "")
+    
+    if status == "approved":
         # If approved, move to commit the changes deterministically
         return "commit_changes_node"
     
     # If rejected, check retry limits
-    section = state.get("current_section", "summary")
-    counts = state.get("section_retry_counts", {})
+    counts = state.section_retry_counts
     current_retries = counts.get(section, 0)
     
     MAX_RETRIES = 2

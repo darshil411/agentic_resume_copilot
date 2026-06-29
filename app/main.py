@@ -37,4 +37,5 @@ app.include_router(router)
 
 if __name__ == "__main__":
     # Start the application server
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
+    # FIX: Restrict reload to the 'app' directory so uploads/checkpoints don't trigger server restarts!
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True, reload_dirs=["app"])

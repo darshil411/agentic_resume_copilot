@@ -5,7 +5,8 @@ def route_on_errors(state: GlobalGraphState) -> str:
     Deterministic Router: Inspects the global errors list to decide if we need to 
     divert to an explicit error handling node before continuing the main flow.
     """
-    errors = state.get("errors", [])
+    # FIX: Use Pydantic dot-notation for the state object
+    errors = state.errors
     
     if not errors:
         return "continue"

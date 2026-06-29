@@ -4,34 +4,60 @@ const API_BASE = 'http://127.0.0.1:8000/api/v1';
  * Start the workflow by uploading resume and JD.
  */
 async function startWorkflow(pdfFile, jobDescription) {
+    console.log('[API] Starting workflow with resume and job description');
     const formData = new FormData();
     formData.append('resume', pdfFile);
     formData.append('job_description', jobDescription);
 
-    const response = await fetch(`${API_BASE}/workflow/start`, {
-        method: 'POST',
-        body: formData
-    });
+    try {
+        console.log(`[API] POST ${API_BASE}/workflow/start`);
+        const response = await fetch(`${API_BASE}/workflow/start`, {
+            method: 'POST',
+            body: formData
+        });
 
-    if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        console.log(`[API] Response status: ${response.status}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[API ERROR] HTTP ${response.status}: ${errorText}`);
+            throw new Error(`API error: ${response.status}`);
+        }
+        const data = await response.json();
+        console.log('[API] Workflow started:', data);
+        return data;
+    } catch (err) {
+        console.error('[API FETCH ERROR]', err);
+        throw err;
     }
-    return response.json();
 }
 
 /**
  * Poll the workflow state.
  */
 async function getWorkflowState(threadId) {
-    const response = await fetch(`${API_BASE}/workflow/${threadId}/state`);
-    if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+    console.log(`[API] Calling: ${API_BASE}/workflow/${threadId}/state`);
+    try {
+        const response = await fetch(`${API_BASE}/workflow/${threadId}/state`);
+        console.log(`[API] Response status: ${response.status}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[API ERROR] HTTP ${response.status}: ${errorText}`);
+            throw new Error(`API error: ${response.status} - ${errorText}`);
+        }
+        const data = await response.json();
+        console.log('[API] Received state data:', data);
+        return data;
+    } catch (err) {
+        console.error('[API FETCH ERROR]', err);
+        throw err;
     }
-    return response.json();
 }
 
 /**
  * Submit user feedback to resume the workflow from a breakpoint.
+ * @param {string} threadId - the active thread
+ * @param {string} feedback  - user's text feedback
+ * @param {string} action    - "approve" or "regenerate"
  */
 async function approveWorkflow(threadId, feedback, action) {
     const response = await fetch(`${API_BASE}/workflow/approve`, {
@@ -42,7 +68,7 @@ async function approveWorkflow(threadId, feedback, action) {
         body: JSON.stringify({
             thread_id: threadId,
             feedback: feedback,
-            action: action // "approve" or "regenerate"
+            approved: action === 'approve'
         })
     });
 

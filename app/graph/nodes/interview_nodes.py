@@ -1,7 +1,8 @@
 from typing import Dict, Any, List
-from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field
+from langchain_core.messages import HumanMessage # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel, Field # pyright: ignore[reportMissingImports]
 
+# Imported GlobalGraphState to ensure strict type synchronization across subgraphs
 from app.graph.state.global_state import GlobalGraphState
 from app.utils.llm_factory import get_llm
 
@@ -15,12 +16,14 @@ def generate_interview_prep_node(state: GlobalGraphState) -> Dict[str, Any]:
     LLM Node: Generates interview questions and prep material.
     Crucially, it uses `original_resume` to remain strictly independent of the resume optimization pipeline.
     """
-    resume = state.get("original_resume")
-    jd_analysis = state.get("jd_analysis")
+    # FIX: Switched from state.get() to standard Pydantic dot-notation to avoid AttributeError crashes
+    resume = state.original_resume
+    jd_analysis = state.jd_analysis
     
     if not resume or not jd_analysis:
         return {"errors": ["Missing original_resume or jd_analysis for interview prep."]}
         
+    # Uses centralized factory default for Gemini ("gemini-3.5-flash" or equivalent modern 2026 model)
     llm = get_llm("gemini").with_structured_output(InterviewPrepOutput)
     
     prompt = f"""

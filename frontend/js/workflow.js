@@ -6,6 +6,7 @@ let isHitlActive = false;
  * Start polling the backend graph state.
  */
 function startPolling(threadId) {
+    console.log('[INIT] Starting polling with thread ID:', threadId);
     currentThreadId = threadId;
     
     // Initial fetch immediately
@@ -13,6 +14,7 @@ function startPolling(threadId) {
     
     // Then poll every 3 seconds
     pollingInterval = setInterval(pollState, 3000);
+    console.log('[INIT] Polling interval set (every 3s)');
 }
 
 /**
@@ -32,10 +34,14 @@ async function pollState() {
     if (!currentThreadId) return;
 
     try {
+        console.log(`[POLLING] Fetching state for thread: ${currentThreadId}`);
         const stateData = await getWorkflowState(currentThreadId);
+        console.log('[POLLING] Received state data:', stateData);
         handleStateUpdate(stateData);
     } catch (error) {
-        console.error("Polling error:", error);
+        console.error("[POLLING ERROR] Failed to fetch state:", error);
+        console.error("[POLLING ERROR] Thread ID:", currentThreadId);
+        showToast(`API Error: ${error.message || 'Failed to connect to backend'}`, "error");
     }
 }
 
@@ -86,19 +92,92 @@ function buildResumeHtml(resumeData) {
     if (!resumeData || typeof resumeData !== 'object') return null;
     const name = resumeData.name || resumeData.full_name || '';
     const summary = resumeData.summary || '';
-    const skills = (resumeData.skills || []).join(', ');
-    const experience = (resumeData.experience || []).map(e => {
-        const title = e.title || e.role || '';
-        const company = e.company || '';
-        const desc = (e.description || e.responsibilities || []).join(' ');
-        return `<div class="mb-3"><strong>${title}</strong>${company ? ` at ${company}` : ''}<p class="text-sm text-gray-600 mt-1">${desc}</p></div>`;
-    }).join('');
 
+    // --- SKILLS ---
+    let skillsList = [];
+    if (resumeData.skills && typeof resumeData.skills === 'object' && !Array.isArray(resumeData.skills)) {
+        skillsList = [
+            ...(resumeData.skills.languages || []),
+            ...(resumeData.skills.frameworks || []),
+            ...(resumeData.skills.tools || []),
+            ...(resumeData.skills.databases || []),
+            ...(resumeData.skills.concepts || [])
+        ];
+    } else if (Array.isArray(resumeData.skills)) {
+        skillsList = resumeData.skills;
+    } else if (typeof resumeData.skills === 'string') {
+        skillsList = [resumeData.skills]; // Fallback if AI returns a plain string
+    }
+    const skills = skillsList.join(', ');
+
+    // --- EXPERIENCE ---
+    let experience = '';
+    if (Array.isArray(resumeData.experience)) {
+        experience = resumeData.experience.map(e => {
+            const title = e.title || e.role || '';
+            const company = e.company || '';
+            const duration = e.duration ? ` <span class="text-black">| ${e.duration}</span>` : '';
+            // Handle bullets if they are an array or a string
+            const desc = Array.isArray(e.bullets || e.description || e.responsibilities) 
+                            ? (e.bullets || e.description || e.responsibilities).join(' ')
+                            : (e.bullets || e.description || e.responsibilities || '');
+            return `<div class="mb-3"><strong>${title}</strong>${company ? ` at ${company}` : ''}${duration}<p class="text-sm text-black mt-1">${desc}</p></div>`;
+        }).join('');
+    } else if (typeof resumeData.experience === 'string') {
+        // Safe fallback if AI returns a plain text string
+        experience = `<div class="mb-3"><p class="text-sm text-black mt-1 whitespace-pre-wrap">${resumeData.experience}</p></div>`;
+    }
+
+    // --- PROJECTS ---
+    let projects = '';
+    if (Array.isArray(resumeData.projects)) {
+        projects = resumeData.projects.map(p => {
+            const title = p.title || p.name || '';
+            const tech = p.tech_stack && Array.isArray(p.tech_stack) && p.tech_stack.length > 0 ? `<span class="text-xs text-green font-bold ml-2">(${p.tech_stack.join(', ')})</span>` : '';
+            const desc = p.description || '';
+            return `<div class="mb-3"><strong>${title}</strong>${tech}<p class="text-sm text-black mt-1">${desc}</p></div>`;
+        }).join('');
+    } else if (typeof resumeData.projects === 'string') {
+        // Safe fallback if AI returns a plain text string
+        projects = `<div class="mb-3"><p class="text-sm text-black mt-1 whitespace-pre-wrap">${resumeData.projects}</p></div>`;
+    }
+
+    // --- EDUCATION ---
+    let education = '';
+    if (Array.isArray(resumeData.education)) {
+        education = resumeData.education.map(ed => {
+            const degree = ed.degree || '';
+            const college = ed.college || ed.institution || '';
+            const year = ed.year ? ` | ${ed.year}` : '';
+            const cgpa = ed.cgpa ? ` (CGPA: ${ed.cgpa})` : '';
+            return `<div class="mb-2"><strong>${degree}</strong><br><span class="text-sm text-black">${college}${year}${cgpa}</span></div>`;
+        }).join('');
+    } else if (typeof resumeData.education === 'string') {
+        education = `<div class="mb-2"><span class="text-sm text-black whitespace-pre-wrap">${resumeData.education}</span></div>`;
+    } else if (resumeData.education && typeof resumeData.education === 'object') {
+        // Safe fallback if AI returns a single object instead of an array of objects
+        const ed = resumeData.education;
+        const degree = ed.degree || '';
+        const college = ed.college || ed.institution || '';
+        const year = ed.year ? ` | ${ed.year}` : '';
+        const cgpa = ed.cgpa ? ` (CGPA: ${ed.cgpa})` : '';
+        education = `<div class="mb-2"><strong>${degree}</strong><br><span class="text-sm text-black">${college}${year}${cgpa}</span></div>`;
+    }
+
+    // --- ASSEMBLE FINAL HTML ---
     return `
-        <h2 class="text-lg font-bold mb-1">${name}</h2>
-        ${summary ? `<p class="text-sm text-gray-700 mb-3">${summary}</p>` : ''}
-        ${skills ? `<div class="mb-3"><h4 class="text-xs font-bold text-gray-500 uppercase mb-1">Skills</h4><p class="text-sm">${skills}</p></div>` : ''}
-        ${experience ? `<div class="mb-3"><h4 class="text-xs font-bold text-gray-500 uppercase mb-1">Experience</h4>${experience}</div>` : ''}
+        <div class="bg-white text-black p-2">
+            <h2 class="text-lg font-bold mb-1 text-navy">${name}</h2>
+            ${summary ? `<p class="text-sm text-black mb-4 whitespace-pre-wrap">${summary}</p>` : ''}
+            
+            ${skills ? `<div class="mb-4"><h4 class="text-xs font-bold text-navy uppercase mb-1 border-b border-navy pb-1">Skills</h4><p class="text-sm">${skills}</p></div>` : ''}
+            
+            ${experience ? `<div class="mb-4"><h4 class="text-xs font-bold text-navy uppercase mb-1 border-b border-navy pb-1">Experience</h4>${experience}</div>` : ''}
+            
+            ${projects ? `<div class="mb-4"><h4 class="text-xs font-bold text-navy uppercase mb-1 border-b border-navy pb-1">Projects</h4>${projects}</div>` : ''}
+            
+            ${education ? `<div class="mb-4"><h4 class="text-xs font-bold text-navy uppercase mb-1 border-b border-navy pb-1">Education</h4>${education}</div>` : ''}
+        </div>
     `;
 }
 
@@ -124,15 +203,13 @@ function handleStateUpdate(data) {
     if (!data) return;
 
     const values = data.values || {};
-    const stateType = data.state;           // "running" | "interrupt" | "end"
+    const stateType = data.state;           
     const nextNodes = data.next_nodes || [];
 
-    // Log any backend errors to console for debugging
     if (values.errors && values.errors.length > 0) {
         console.warn("Backend errors:", values.errors);
     }
 
-    // ── Error state (graph crashed in background) ──────────────────────────
     if (stateType === "error") {
         const msg = data.error_message || "An error occurred in the AI pipeline.";
         updateStateBadge("Error");
@@ -144,7 +221,50 @@ function handleStateUpdate(data) {
 
     // ── Resume panels ──────────────────────────────────────────────────────
     const originalHtml = buildResumeHtml(values.original_resume);
-    const optimizedHtml = buildResumeHtml(values.optimized_resume);
+    let optimizedHtml = "";
+
+    // THE FIX: Render the AI's proposed changes to the UI while waiting for user approval
+    // THE FIX: Render AI proposed changes safely, even if they are JSON objects
+    if (stateType === "interrupt" && values.proposed_changes) {
+        const sectionName = (values.current_section || "Section").toUpperCase();
+        const reasoning = values.proposed_changes.reasoning || "Optimized for ATS matching.";
+        
+        // Safely stringify the content if the AI returned a JSON object/array instead of a string
+        let content = values.proposed_changes.new_content || "";
+        if (typeof content === 'object') {
+            content = JSON.stringify(content, null, 2);
+        }
+        
+        // Safely fetch the resume preview (Subgraph state sometimes hides the original_resume)
+        const resumeToPreview = values.optimized_resume || values.original_resume;
+        let currentResumeHtml = resumeToPreview 
+            ? buildResumeHtml(resumeToPreview) 
+            : `<div class="p-4 text-gray-500 italic text-sm">Resume preview syncing...</div>`;
+        
+        optimizedHtml = `
+            <div class="bg-blue-50 text-blue-800 p-4 mb-4 rounded-lg border border-blue-200 shadow-sm">
+                <h4 class="font-bold text-sm mb-1 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Proposed Change for ${sectionName}
+                </h4>
+                <p class="text-xs leading-relaxed mb-3">${reasoning}</p>
+                <div class="p-3 bg-white border border-blue-100 rounded text-black whitespace-pre-wrap font-mono text-sm">${content}</div>
+            </div>
+            
+            <div class="opacity-60 pointer-events-none border-t pt-4">
+                <h3 class="text-xs font-bold text-gray-400 uppercase mb-3">Current Resume Preview</h3>
+                ${currentResumeHtml}
+            </div>
+        `;
+      } else if (values.optimized_resume) {
+
+        optimizedHtml = buildResumeHtml(values.optimized_resume);
+
+
+    } else {
+        optimizedHtml = `<div class="text-gray-400 italic text-sm text-center mt-10">Optimizations will appear here once generated...</div>`;
+    }
+
     if (originalHtml || optimizedHtml) {
         renderResume(originalHtml, optimizedHtml);
     }
@@ -166,24 +286,27 @@ function handleStateUpdate(data) {
     }
 
     // ── HITL / State badge ─────────────────────────────────────────────────
-    if (stateType === "interrupt" || nextNodes.some(n => n.includes("approval") || n.includes("human"))) {
+    if (stateType === "interrupt") {
         updateStateBadge("Waiting For Approval");
         if (!isHitlActive) {
             isHitlActive = true;
             toggleHITLControls(true);
             showToast("Action required: Please review the optimized resume.", "info");
         }
-    } else if (stateType === "end" || nextNodes.length === 0) {
+    } else if (stateType === "end") {
         updateStateBadge("Completed");
         stopPolling();
+        showToast("All done! Your career copilot results are ready.", "success");
         if (isHitlActive) {
             isHitlActive = false;
             toggleHITLControls(false);
         }
     } else {
         updateStateBadge("Processing");
-        isHitlActive = false;
-        toggleHITLControls(false);
+        if (isHitlActive) {
+            isHitlActive = false;
+            toggleHITLControls(false);
+        }
     }
 }
 

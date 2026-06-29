@@ -2,9 +2,11 @@ import os
 import shutil
 import uuid
 import traceback
+import asyncio
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form  # pyright: ignore[reportMissingImports]
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Request  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel  # pyright: ignore[reportMissingImports]
 
 from app.graph.builders.main_graph import build_main_graph
@@ -16,6 +18,9 @@ router = APIRouter(prefix="/api/v1/workflow")
 # ── Shared graph (built once at module load) ──────────────────────────────────
 checkpointer = get_checkpointer()
 app_graph = build_main_graph(checkpointer=checkpointer)
+
+# ── Thread pool for running synchronous graph operations off the event loop ──
+_executor = ThreadPoolExecutor(max_workers=4)
 
 # ── Uploads directory ─────────────────────────────────────────────────────────
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,6 +57,23 @@ def _run_graph_background(thread_id: str, initial_state: dict) -> None:
         print(f"[graph] Thread {thread_id} FAILED:\n{traceback.format_exc()}")
 
 
+def _resume_graph_background(thread_id: str) -> None:
+    """
+    Resumes a paused LangGraph workflow (after HITL approval) in a background thread.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        print(f"[graph] Resuming thread {thread_id}")
+        _run_status[thread_id] = "running"
+        app_graph.invoke(None, config=config)
+        _run_status[thread_id] = "done"
+        print(f"[graph] Thread {thread_id} resumed and completed.")
+    except Exception as exc:
+        err_msg = f"error: {exc}"
+        _run_status[thread_id] = err_msg
+        print(f"[graph] Thread {thread_id} FAILED on resume:\n{traceback.format_exc()}")
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/start")
@@ -82,6 +104,7 @@ async def start_workflow(
         "job_description_text": job_description,
         "workflow_logs": [],
         "errors": [],
+        "current_section": "summary",   # FIX: seed the section so the subgraph knows what to optimize
     }
 
     # 3. Schedule graph to run in the background — return immediately
@@ -109,9 +132,26 @@ async def get_workflow_state(thread_id: str):
 
     snapshot = None
     try:
-        snapshot = app_graph.get_state(config)
+        loop = asyncio.get_event_loop()
+        # subgraphs=True allows us to see inside the paused resume_subgraph!
+        snapshot = await loop.run_in_executor(_executor, lambda: app_graph.get_state(config, subgraphs=True))
     except Exception as exc:
         print(f"[state] get_state error for {thread_id}: {exc}")
+        return {"state": "error", "error_message": str(exc)}
+
+    if not snapshot:
+        return {"state": "unknown", "values": {}, "next_nodes": []}
+
+    values = snapshot.values.copy()
+
+    # THE MAGIC FIX: Extract trapped state from the paused subgraph
+    if hasattr(snapshot, "tasks"):
+        for task in snapshot.tasks:
+            if hasattr(task, "state") and task.state and hasattr(task.state, "values"):
+                # Merge the subgraph's proposed_changes into the payload we send to the UI
+                values.update(task.state.values)
+
+    state_type = "running"
 
     # If graph crashed before writing any checkpoint
     if run_st.startswith("error"):
@@ -142,6 +182,9 @@ async def get_workflow_state(thread_id: str):
 
     if not next_nodes and run_st == "done":
         state_str = "end"
+    elif next_nodes and run_st == "done":
+        # Graph execution yielded back to us but there are still next nodes -> it is suspended/interrupted
+        state_str = "interrupt"
     elif not next_nodes and run_st == "running":
         # Graph may be mid-execution between checkpoints
         state_str = "running"
@@ -167,58 +210,63 @@ async def get_workflow_state(thread_id: str):
 
 
 @router.post("/approve")
-async def submit_approval(
-    background_tasks: BackgroundTasks,
-    request: ApprovalRequest,
-):
+async def submit_approval(background_tasks: BackgroundTasks, request: Request):
     """
-    Resumes a paused (HITL) workflow with the human's decision.
-    Also runs the resumed graph in the background.
+    Accepts human approval, finds the isolated subgraph state, updates it,
+    and resumes the graph in a background thread.
     """
-    config = {"configurable": {"thread_id": request.thread_id}}
-    snapshot = app_graph.get_state(config)
+    data = await request.json()
+    thread_id = data.get("thread_id")
+    
+    # 1. FIX: Correctly read the boolean 'approved' flag sent by your api.js
+    approved_bool = data.get("approved")          
+    status_str = "approved" if approved_bool is True else "rejected"
+    feedback = data.get("feedback", "")
 
-    if not snapshot or not snapshot.next:
-        raise HTTPException(
-            status_code=400, detail="Workflow is not currently awaiting approval."
-        )
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="thread_id is required")
 
-    # Check for approval nodes — may be subgraph-qualified e.g. "resume_subgraph:approval_processing_node"
-    if not any("approval" in n for n in snapshot.next):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Workflow is paused but not at approval node. Next: {list(snapshot.next)}",
-        )
+    config = {"configurable": {"thread_id": thread_id}}
 
-    approved = request.action.lower() == "approve"
+    # 2. Fetch the state, EXPLICITLY asking to see inside subgraphs
+    loop = asyncio.get_event_loop()
+    snapshot = await loop.run_in_executor(
+        _executor, lambda: app_graph.get_state(config, subgraphs=True)
+    )
+    
+    target_config = config # Default to parent config
+    current_state = snapshot.values if snapshot else {}
+    
+    # 3. THE MAGIC FIX: Find the paused Subgraph's specific ID
+    # We must inject the approval directly into the subgraph's isolated memory bubble.
+    if snapshot and hasattr(snapshot, "tasks"):
+        for task in snapshot.tasks:
+            if task.name == "resume_subgraph" and hasattr(task, "state"):
+                target_config = task.state.config  # <--- Get the Subgraph's private ID
+                current_state = task.state.values
+                break
 
-    # Inject human decision into graph state
-    # Target the approval_processing_node since that's where interrupt_before is set
-    app_graph.update_state(
-        config,
-        {
-            "approval_state": {
-                "approved": approved,
-                "feedback": request.feedback or "",
+    current_section = current_state.get("current_section", "summary")
+
+    new_approval_state = dict(current_state.get("approval_state") or {})
+    new_approval_state[current_section] = status_str
+
+    new_feedback_state = dict(current_state.get("human_feedback") or {})
+    new_feedback_state[current_section] = feedback or ""
+
+    # 4. Push updated state back to the SUBGRAPH
+    await loop.run_in_executor(
+        _executor,
+        lambda: app_graph.update_state(
+            target_config,
+            {
+                "approval_state": new_approval_state,
+                "human_feedback": new_feedback_state,
             }
-        },
-        as_node="approval_processing_node",
+        )
     )
 
-    # Resume graph in background
-    _run_status[request.thread_id] = "running"
+    # 5. Resume the graph as a background task
+    background_tasks.add_task(_resume_graph_background, thread_id)
 
-    def _resume():
-        try:
-            app_graph.invoke(None, config=config)
-            _run_status[request.thread_id] = "done"
-        except Exception as exc:
-            _run_status[request.thread_id] = f"error: {exc}"
-            print(f"[graph] Resume of {request.thread_id} FAILED: {exc}")
-
-    background_tasks.add_task(_resume)
-
-    return {
-        "message": f"Action '{request.action}' submitted. Workflow resuming.",
-        "thread_id": request.thread_id,
-    }
+    return {"message": "Approval submitted.", "section": current_section, "status": status_str}
