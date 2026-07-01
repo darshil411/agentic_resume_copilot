@@ -75,5 +75,9 @@ async function approveWorkflow(threadId, feedback, action) {
     if (!response.ok) {
         throw new Error(`API error: ${response.status}`);
     }
+    
+    // FIX 3: Unfreeze the frontend polling loop immediately upon successful API response
+    isHitlActive = false;
+    
     return response.json();
 }

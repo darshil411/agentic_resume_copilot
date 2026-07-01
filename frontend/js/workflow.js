@@ -2,24 +2,13 @@ let pollingInterval = null;
 let currentThreadId = null;
 let isHitlActive = false;
 
-/**
- * Start polling the backend graph state.
- */
+// FIX 1: Remove the hard polling freeze. The backend will now tell us the true state.
 function startPolling(threadId) {
-    console.log('[INIT] Starting polling with thread ID:', threadId);
     currentThreadId = threadId;
-    
-    // Initial fetch immediately
     pollState();
-    
-    // Then poll every 3 seconds
-    pollingInterval = setInterval(pollState, 3000);
-    console.log('[INIT] Polling interval set (every 3s)');
+    pollingInterval = setInterval(pollState, 3000); 
 }
 
-/**
- * Stop polling
- */
 function stopPolling() {
     if (pollingInterval) {
         clearInterval(pollingInterval);
@@ -27,21 +16,14 @@ function stopPolling() {
     }
 }
 
-/**
- * Poll state logic
- */
 async function pollState() {
     if (!currentThreadId) return;
-
     try {
-        console.log(`[POLLING] Fetching state for thread: ${currentThreadId}`);
         const stateData = await getWorkflowState(currentThreadId);
-        console.log('[POLLING] Received state data:', stateData);
+        if (!stateData) return;
         handleStateUpdate(stateData);
     } catch (error) {
-        console.error("[POLLING ERROR] Failed to fetch state:", error);
-        console.error("[POLLING ERROR] Thread ID:", currentThreadId);
-        showToast(`API Error: ${error.message || 'Failed to connect to backend'}`, "error");
+        console.error("Polling error:", error);
     }
 }
 
@@ -199,114 +181,103 @@ function buildResumeHtml(resumeData) {
  *   }
  * }
  */
-function handleStateUpdate(data) {
-    if (!data) return;
+// 2. The Corrected HITL Render Logic
+// 2. The Corrected HITL Render Logic
+function handleStateUpdate(stateData) {
+    const values = stateData.values || {};
+    const state = stateData.state;
 
-    const values = data.values || {};
-    const stateType = data.state;           
-    const nextNodes = data.next_nodes || [];
-
-    if (values.errors && values.errors.length > 0) {
-        console.warn("Backend errors:", values.errors);
-    }
-
-    if (stateType === "error") {
-        const msg = data.error_message || "An error occurred in the AI pipeline.";
-        updateStateBadge("Error");
+    // FIX 2: Restore the Error Handler so the UI doesn't silently ignore crashes
+    if (state === "error") {
+        if (typeof updateStateBadge === "function") updateStateBadge("Error");
         stopPolling();
-        showToast("Pipeline error: " + msg, "error");
-        console.error("Graph error:", msg);
+        showToast("Pipeline error occurred. Check backend terminal.", "error");
         return;
     }
 
-    // ── Resume panels ──────────────────────────────────────────────────────
-    const originalHtml = buildResumeHtml(values.original_resume);
-    let optimizedHtml = "";
+    if (typeof updateStateBadge === "function") {
+        if (state === "interrupt") updateStateBadge("Waiting For Approval");
+        else if (state === "end") updateStateBadge("Completed");
+        else updateStateBadge("Processing");
+    }
 
-    // THE FIX: Render the AI's proposed changes to the UI while waiting for user approval
-    // THE FIX: Render AI proposed changes safely, even if they are JSON objects
-    if (stateType === "interrupt" && values.proposed_changes) {
-        const sectionName = (values.current_section || "Section").toUpperCase();
-        const reasoning = values.proposed_changes.reasoning || "Optimized for ATS matching.";
+    // A. Render Original Resume (Left Panel)
+    if (values.original_resume) {
+        const originalHtml = buildResumeHtml(values.original_resume);
+        const originalContainer = document.getElementById("resumeOriginalContent");
+        if (originalContainer) originalContainer.innerHTML = originalHtml;
+    }
+
+    // B. Handle the Interrupt (Right Panel - Proposed Changes)
+    if (state === "interrupt") {
+        isHitlActive = true;
+        if (typeof toggleHITLControls === "function") toggleHITLControls(true);
+
+        const proposed = values.proposed_changes || {};
+        const currentSection = values.current_section || "section";
+
+        const sectionLabel = document.getElementById("currentSectionLabel");
+        if (sectionLabel) sectionLabel.innerText = `Currently Reviewing: ${currentSection}`;
+
+        let proposalHtml = `<div class="text-gray-500 italic flex justify-center mt-10">Formatting proposal...</div>`;
         
-        // Safely stringify the content if the AI returned a JSON object/array instead of a string
-        let content = values.proposed_changes.new_content || "";
-        if (typeof content === 'object') {
-            content = JSON.stringify(content, null, 2);
+        if (proposed.new_content) {
+            proposalHtml = `
+                <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg shadow-sm">
+                    <h3 class="text-lg font-bold text-[#0d47a1] mb-2">Proposed ${currentSection} Upgrade</h3>
+                    <p class="text-xs text-gray-600 mb-4">${proposed.reasoning || "Optimized for ATS matching."}</p>
+                    <div class="whitespace-pre-wrap font-mono text-sm text-black bg-white p-3 border border-gray-200 rounded">
+                        ${proposed.new_content}
+                    </div>
+                </div>
+            `;
         }
+        const optimizedContainer = document.getElementById("resumeOptimizedContent");
+        if (optimizedContainer) optimizedContainer.innerHTML = proposalHtml;
         
-        // Safely fetch the resume preview (Subgraph state sometimes hides the original_resume)
-        const resumeToPreview = values.optimized_resume || values.original_resume;
-        let currentResumeHtml = resumeToPreview 
-            ? buildResumeHtml(resumeToPreview) 
-            : `<div class="p-4 text-gray-500 italic text-sm">Resume preview syncing...</div>`;
-        
-        optimizedHtml = `
-            <div class="bg-blue-50 text-blue-800 p-4 mb-4 rounded-lg border border-blue-200 shadow-sm">
-                <h4 class="font-bold text-sm mb-1 flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    Proposed Change for ${sectionName}
-                </h4>
-                <p class="text-xs leading-relaxed mb-3">${reasoning}</p>
-                <div class="p-3 bg-white border border-blue-100 rounded text-black whitespace-pre-wrap font-mono text-sm">${content}</div>
-            </div>
-            
-            <div class="opacity-60 pointer-events-none border-t pt-4">
-                <h3 class="text-xs font-bold text-gray-400 uppercase mb-3">Current Resume Preview</h3>
-                ${currentResumeHtml}
-            </div>
-        `;
-      } else if (values.optimized_resume) {
-
-        optimizedHtml = buildResumeHtml(values.optimized_resume);
-
-
-    } else {
-        optimizedHtml = `<div class="text-gray-400 italic text-sm text-center mt-10">Optimizations will appear here once generated...</div>`;
+        // FIX 3: We REMOVED the "return;" statement here.
+        // The script now continues downward to render your parallel branches!
     }
 
-    if (originalHtml || optimizedHtml) {
-        renderResume(originalHtml, optimizedHtml);
+    // C. Graph Resumed / Committed
+    if (isHitlActive && state === "running") {
+        isHitlActive = false;
+        if (typeof toggleHITLControls === "function") toggleHITLControls(false);
+        const sectionLabel = document.getElementById("currentSectionLabel");
+        if (sectionLabel) sectionLabel.innerText = "Processing Next Section...";
     }
 
-    // ── Interview Prep ─────────────────────────────────────────────────────
+    if (values.optimized_resume && !isHitlActive) {
+        const optimizedHtml = buildResumeHtml(values.optimized_resume);
+        const optimizedContainer = document.getElementById("resumeOptimizedContent");
+        if (optimizedContainer) {
+            optimizedContainer.innerHTML = optimizedHtml;
+        }
+    }
+
+    // D. End State
+    if (state === "end") {
+        isHitlActive = false;
+        if (typeof toggleHITLControls === "function") toggleHITLControls(false);
+        const sectionLabel = document.getElementById("currentSectionLabel");
+        if (sectionLabel) sectionLabel.innerText = "Final Optimized Resume";
+        stopPolling();
+    }
+    
+    // E. Interview Prep (Now successfully renders even during a resume interrupt!)
     const rawQuestions = values.interview_questions || [];
     if (rawQuestions.length > 0) {
         const normalized = normalizeInterviewQuestions(rawQuestions);
-        renderInterviewDeck(normalized);
+        if (typeof renderInterviewDeck === "function") renderInterviewDeck(normalized);
     }
 
-    // ── Outreach Toolkit ───────────────────────────────────────────────────
+    // F. Outreach Toolkit
     const coldEmails = values.cold_emails || [];
     const referrals = values.referral_templates || [];
     const followups = values.followup_templates || [];
     if (coldEmails.length > 0 || referrals.length > 0 || followups.length > 0) {
         const normalized = normalizeOutreachEmails(coldEmails, referrals, followups);
-        renderOutreachToolkit(normalized);
-    }
-
-    // ── HITL / State badge ─────────────────────────────────────────────────
-    if (stateType === "interrupt") {
-        updateStateBadge("Waiting For Approval");
-        if (!isHitlActive) {
-            isHitlActive = true;
-            toggleHITLControls(true);
-            showToast("Action required: Please review the optimized resume.", "info");
-        }
-    } else if (stateType === "end") {
-        updateStateBadge("Completed");
-        stopPolling();
-        showToast("All done! Your career copilot results are ready.", "success");
-        if (isHitlActive) {
-            isHitlActive = false;
-            toggleHITLControls(false);
-        }
-    } else {
-        updateStateBadge("Processing");
-        if (isHitlActive) {
-            isHitlActive = false;
-            toggleHITLControls(false);
-        }
+        if (typeof renderOutreachToolkit === "function") renderOutreachToolkit(normalized);
     }
 }
 

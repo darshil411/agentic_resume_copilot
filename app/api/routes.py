@@ -11,6 +11,7 @@ from pydantic import BaseModel  # pyright: ignore[reportMissingImports]
 
 from app.graph.builders.main_graph import build_main_graph
 from app.utils.sqlite_checkpoint import get_checkpointer
+from fastapi import APIRouter, Request, BackgroundTasks
 
 # ── Router ───────────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/v1/workflow")
@@ -119,154 +120,111 @@ async def start_workflow(
 
 @router.get("/{thread_id}/state")
 async def get_workflow_state(thread_id: str):
-    """
-    Returns the current graph state for a given thread.
-
-    Response shape (matches workflow.js):
-      { state: "running"|"interrupt"|"end"|"error", values: {...}, next_nodes: [...] }
-    """
     config = {"configurable": {"thread_id": thread_id}}
-
-    # Check in-memory run status first (handles "not started yet" or crashed)
-    run_st = _run_status.get(thread_id, "unknown")
-
-    snapshot = None
     try:
-        loop = asyncio.get_event_loop()
-        # subgraphs=True allows us to see inside the paused resume_subgraph!
-        snapshot = await loop.run_in_executor(_executor, lambda: app_graph.get_state(config, subgraphs=True))
-    except Exception as exc:
-        print(f"[state] get_state error for {thread_id}: {exc}")
-        return {"state": "error", "error_message": str(exc)}
-
-    if not snapshot:
-        return {"state": "unknown", "values": {}, "next_nodes": []}
-
-    values = snapshot.values.copy()
-
-    # THE MAGIC FIX: Extract trapped state from the paused subgraph
-    if hasattr(snapshot, "tasks"):
-        for task in snapshot.tasks:
-            if hasattr(task, "state") and task.state and hasattr(task.state, "values"):
-                # Merge the subgraph's proposed_changes into the payload we send to the UI
-                values.update(task.state.values)
-
-    state_type = "running"
-
-    # If graph crashed before writing any checkpoint
-    if run_st.startswith("error"):
+        state_snapshot = app_graph.get_state(config)
+        
+        # 1. Safely extract standard values from Pydantic
+        if hasattr(state_snapshot.values, "model_dump"):
+            values = state_snapshot.values.model_dump()
+        elif hasattr(state_snapshot.values, "dict"):
+            values = state_snapshot.values.dict()
+        else:
+            values = dict(state_snapshot.values)
+            
+        # 2. Gather ALL next_nodes (Parent + deeply nested Subgraphs)
+        all_next_nodes = list(state_snapshot.next) if state_snapshot.next else []
+        
+        if hasattr(state_snapshot, 'tasks') and state_snapshot.tasks:
+            for task in state_snapshot.tasks:
+                task_state = getattr(task, 'state', None)
+                if not task_state:
+                    continue
+                    
+                # Extract deeper next_nodes to successfully spot the HITL pause
+                if hasattr(task_state, 'next') and task_state.next:
+                    all_next_nodes.extend(task_state.next)
+                    
+                # Extract deeper subgraph values
+                task_values = task_state if isinstance(task_state, dict) else getattr(task_state, 'values', {})
+                if isinstance(task_values, dict):
+                    if task_values.get("proposed_changes"):
+                        values["proposed_changes"] = task_values.get("proposed_changes")
+                    if task_values.get("current_section"):
+                        values["current_section"] = task_values.get("current_section")
+                        
+        # 3. Determine true status based on the combined next_nodes list
+        run_status = _run_status.get(thread_id, "running")
+        
+        if "approval_processing_node" in all_next_nodes:
+            current_state = "interrupt"
+        elif run_status.startswith("error"):
+            current_state = "error"
+        elif not all_next_nodes and run_status == "done":
+            current_state = "end"
+        else:
+            current_state = "running"
+            
         return {
-            "state": "error",
-            "error_message": run_st.removeprefix("error: "),
-            "values": {},
-            "next_nodes": [],
+            "state": current_state,
+            "next_nodes": all_next_nodes,
+            "values": values
         }
-
-    # If snapshot is not yet available (graph is still starting up)
-    if not snapshot or not snapshot.values:
-        return {
-            "state": "running",
-            "values": {},
-            "next_nodes": [],
-        }
-
-    next_nodes: list = list(snapshot.next) if snapshot.next else []
-
-    # Determine high-level state string
-    # NOTE: When interrupted inside a subgraph, LangGraph reports next_nodes as
-    # "<subgraph_name>:<node_name>" (e.g. "resume_subgraph:approval_processing_node")
-    is_interrupted = any(
-        "approval" in n or "human" in n
-        for n in next_nodes
-    )
-
-    if not next_nodes and run_st == "done":
-        state_str = "end"
-    elif next_nodes and run_st == "done":
-        # Graph execution yielded back to us but there are still next nodes -> it is suspended/interrupted
-        state_str = "interrupt"
-    elif not next_nodes and run_st == "running":
-        # Graph may be mid-execution between checkpoints
-        state_str = "running"
-    elif is_interrupted:
-        state_str = "interrupt"
-    else:
-        state_str = "running"
-
-    # Serialize Pydantic models so they are JSON-safe
-    raw_values: dict = dict(snapshot.values)
-    safe_values: dict = {}
-    for k, v in raw_values.items():
-        try:
-            safe_values[k] = v.model_dump() if hasattr(v, "model_dump") else v
-        except Exception:
-            safe_values[k] = str(v)
-
-    return {
-        "state": state_str,
-        "values": safe_values,
-        "next_nodes": next_nodes,
-    }
-
+    except Exception as e:
+        print(f"API GET STATE ERROR: {e}")  
+        return {"error": str(e), "state": "error"}
 
 @router.post("/approve")
-async def submit_approval(background_tasks: BackgroundTasks, request: Request):
-    """
-    Accepts human approval, finds the isolated subgraph state, updates it,
-    and resumes the graph in a background thread.
-    """
+async def submit_approval(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     thread_id = data.get("thread_id")
-    
-    # 1. FIX: Correctly read the boolean 'approved' flag sent by your api.js
-    approved_bool = data.get("approved")          
-    status_str = "approved" if approved_bool is True else "rejected"
+    approved = data.get("approved")
     feedback = data.get("feedback", "")
-
-    if not thread_id:
-        raise HTTPException(status_code=400, detail="thread_id is required")
-
+    
     config = {"configurable": {"thread_id": thread_id}}
-
-    # 2. Fetch the state, EXPLICITLY asking to see inside subgraphs
-    loop = asyncio.get_event_loop()
-    snapshot = await loop.run_in_executor(
-        _executor, lambda: app_graph.get_state(config, subgraphs=True)
-    )
     
-    target_config = config # Default to parent config
-    current_state = snapshot.values if snapshot else {}
-    
-    # 3. THE MAGIC FIX: Find the paused Subgraph's specific ID
-    # We must inject the approval directly into the subgraph's isolated memory bubble.
-    if snapshot and hasattr(snapshot, "tasks"):
-        for task in snapshot.tasks:
-            if task.name == "resume_subgraph" and hasattr(task, "state"):
-                target_config = task.state.config  # <--- Get the Subgraph's private ID
-                current_state = task.state.values
-                break
-
-    current_section = current_state.get("current_section", "summary")
-
-    new_approval_state = dict(current_state.get("approval_state") or {})
-    new_approval_state[current_section] = status_str
-
-    new_feedback_state = dict(current_state.get("human_feedback") or {})
-    new_feedback_state[current_section] = feedback or ""
-
-    # 4. Push updated state back to the SUBGRAPH
-    await loop.run_in_executor(
-        _executor,
-        lambda: app_graph.update_state(
+    try:
+        state_snapshot = app_graph.get_state(config)
+        target_config = config
+        
+        # CORE FIX: Find the SPECIFIC subgraph that is actively paused
+        if hasattr(state_snapshot, 'tasks') and state_snapshot.tasks:
+            for task in state_snapshot.tasks:
+                task_state = getattr(task, 'state', None)
+                # ONLY grab the config if this task has a pending 'next' node (Meaning it is the paused one!)
+                if task_state and hasattr(task_state, 'next') and task_state.next:
+                    if hasattr(task_state, 'config'):
+                        target_config = task_state.config
+                        break
+                        
+        # Extract state dict safely using the correct config
+        raw_values = app_graph.get_state(target_config).values
+        if hasattr(raw_values, "model_dump"):
+            current_state = raw_values.model_dump()
+        elif hasattr(raw_values, "dict"):
+            current_state = raw_values.dict()
+        else:
+            current_state = dict(raw_values)
+        
+        current_section = current_state.get("current_section") or "summary"
+        status_str = "approved" if approved else "rejected"
+        
+        new_approval_state = current_state.get("approval_state") or {}
+        new_approval_state[current_section] = status_str
+        
+        new_feedback_state = current_state.get("human_feedback") or {}
+        new_feedback_state[current_section] = feedback
+        
+        app_graph.update_state(
             target_config,
             {
                 "approval_state": new_approval_state,
-                "human_feedback": new_feedback_state,
+                "human_feedback": new_feedback_state
             }
         )
-    )
-
-    # 5. Resume the graph as a background task
-    background_tasks.add_task(_resume_graph_background, thread_id)
-
-    return {"message": "Approval submitted.", "section": current_section, "status": status_str}
+        
+        background_tasks.add_task(_resume_graph_background, thread_id)
+        return {"message": "Approval submitted and workflow resumed."}
+    except Exception as e:
+        print(f"API APPROVAL ERROR: {e}")  
+        return {"error": str(e)}
