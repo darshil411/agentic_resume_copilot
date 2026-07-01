@@ -5,6 +5,7 @@ from app.graph.state.reducers import append_list, merge_dicts
 from app.models.resume import StructuredResume
 from app.models.jd import JDAnalysis
 from app.models.ats import ATSReport
+from app.api.dtos.enums import WorkflowStatus
 
 class GlobalGraphState(BaseModel):
     # Core Inputs
@@ -42,4 +43,4 @@ class GlobalGraphState(BaseModel):
     # Global channels
     workflow_logs: Annotated[List[str], append_list] = Field(default_factory=list)
     errors: Annotated[List[str], append_list] = Field(default_factory=list)
-    branch_status: Annotated[Dict[str, str], merge_dicts] = Field(default_factory=dict)
+    branch_status: Annotated[Dict[str, WorkflowStatus], merge_dicts] = Field(default_factory=dict)

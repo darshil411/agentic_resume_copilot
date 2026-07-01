@@ -1,0 +1,8 @@
+export const WorkflowStatus = {
+    PROCESSING: 'PROCESSING',
+    ACTION_REQUIRED: 'ACTION_REQUIRED',
+    READY: 'READY',
+    WAITING: 'WAITING',
+    FAILED: 'FAILED',
+    COMPLETED: 'COMPLETED'
+};

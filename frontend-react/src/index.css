@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+/* Custom fonts and colors mapping from previous vanilla project */
+@theme {
+  --font-sans: 'Inter', sans-serif;
+  --color-navy: #0d47a1;
+  --color-green: #00e676;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #f9fafb; /* gray-50 */
+  color: #000;
+}
+
+/* Custom scrollbars from previous */
+.scroll-pane {
+  overflow-y: auto;
+}
+.scroll-pane::-webkit-scrollbar {
+  width: 6px;
+}
+.scroll-pane::-webkit-scrollbar-track {
+  background: #f1f1f1; 
+}
+.scroll-pane::-webkit-scrollbar-thumb {
+  background: #cbd5e1; 
+  border-radius: 4px;
+}
+.scroll-pane::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8; 
+}
+
+/* Toast animations */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background-color: #333;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  transform: translateY(100px);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  z-index: 1000;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.toast.show {
+  transform: translateY(0);
+  opacity: 1;
+}
+.toast-success { background-color: #059669; }
+.toast-error { background-color: #dc2626; }
+.toast-info { background-color: #2563eb; }
+
+/* Skeleton animation */
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+.skeleton-shimmer {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(to right, #f6f7f8 4%, #edeef1 25%, #f6f7f8 36%);
+  background-size: 1000px 100%;
+}
