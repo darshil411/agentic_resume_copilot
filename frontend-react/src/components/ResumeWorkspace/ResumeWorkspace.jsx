@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useResumeTask } from '../../hooks/useResumeTask';
 import { WorkflowStatus } from '../../models/enums';
 import { ResumePaneSkeleton } from '../common/SkeletonLoaders';
@@ -7,6 +7,7 @@ import { Check, RotateCcw } from 'lucide-react';
 
 export default function ResumeWorkspace() {
     const { threadId } = useParams();
+    const navigate = useNavigate();
     const { task, isLoading, error, approve, regenerate } = useResumeTask(threadId, 3000);
     const [feedback, setFeedback] = useState('');
     const [actionLoading, setActionLoading] = useState(false);
@@ -121,6 +122,12 @@ export default function ResumeWorkspace() {
                 </div>
                 <h2 className="text-2xl font-bold text-navy">Resume Optimization Complete!</h2>
                 <p className="text-gray-500 max-w-md">Your resume has been fully optimized. Check the Export Hub to download it.</p>
+                <button 
+                    onClick={() => navigate(`/workspace/${threadId}/exports`)}
+                    className="mt-6 py-2 px-6 bg-navy text-white rounded-lg font-medium hover:bg-blue-800 transition-colors"
+                >
+                    Go to Export Hub
+                </button>
             </div>
         );
     }

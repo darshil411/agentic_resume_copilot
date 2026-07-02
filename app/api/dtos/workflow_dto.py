@@ -1,9 +1,9 @@
 from pydantic import BaseModel
-from typing import TypedDict
 from datetime import datetime
 from app.api.dtos.enums import WorkflowStatus
 
-class BranchStatuses(TypedDict):
+# Changed from TypedDict to BaseModel for strict Pydantic compatibility
+class BranchStatuses(BaseModel):
     resume_branch: WorkflowStatus
     interview_branch: WorkflowStatus
     outreach_branch: WorkflowStatus

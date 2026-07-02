@@ -43,4 +43,4 @@ def build_resume_subgraph():
     builder.add_edge("escalation_node", END)
     builder.set_entry_point("optimize_section_node")
     
-    return builder.compile(interrupt_before=["approval_processing_node"])
+    return builder.compile()

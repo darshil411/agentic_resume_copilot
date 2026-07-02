@@ -30,7 +30,7 @@ export default function ExportWorkspace() {
     }, [threadId]);
 
     const handleDownload = (type) => {
-        alert(`Downloading ${type}... (Not implemented in backend yet)`);
+        window.open(`http://localhost:8000/api/v1/exports/${threadId}/${type}`, '_blank');
     };
 
     if (isLoading) {

@@ -14,7 +14,15 @@ export function useResumeTask(threadId, pollInterval = 5000) {
             setTask(result);
             setError(null);
         } catch (err) {
-            setError(err);
+            // Only surface hard errors (4xx client errors).
+            // 5xx / network errors are transient \u2014 the resume subgraph may not have
+            // started yet (interview/outreach are still running), so silently retry.
+            const status = err?.status;
+            const isPermanent = status && status >= 400 && status < 500;
+            if (isPermanent) {
+                setError(err);
+            }
+            // Transient errors: keep existing task data (or null) and keep polling
         } finally {
             setIsLoading(false);
         }
@@ -28,12 +36,12 @@ export function useResumeTask(threadId, pollInterval = 5000) {
 
     const approve = async (taskId, version, feedback) => {
         await resumeService.approveTask(threadId, taskId, version, feedback);
-        await fetchTask(); // invalidate cache immediately
+        await fetchTask();
     };
 
     const regenerate = async (taskId, version, feedback) => {
         await resumeService.regenerateTask(threadId, taskId, version, feedback);
-        await fetchTask(); // invalidate cache immediately
+        await fetchTask();
     };
 
     const invalidate = () => fetchTask();

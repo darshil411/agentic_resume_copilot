@@ -10,16 +10,17 @@ def route_after_approval(state: GlobalGraphState) -> str:
     section = state.current_section or "summary"
     approval_state = state.approval_state
     
-    # FIX 2: Since approval_state IS a standard dictionary, we use .get() here.
-    # We check the specific section's status (e.g., {"projects": "approved"})
-    status = approval_state.get(section, "")
-    
+    # FIX 2: Guard against None — these are Optional fields in GlobalGraphState
+    status = (approval_state or {}).get(section, "")
+    if status == "skipped":
+        return "commit_changes_node"
+
     if status == "approved":
         # If approved, move to commit the changes deterministically
         return "commit_changes_node"
     
     # If rejected, check retry limits
-    counts = state.section_retry_counts
+    counts = state.section_retry_counts or {}
     current_retries = counts.get(section, 0)
     
     MAX_RETRIES = 2

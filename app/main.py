@@ -26,10 +26,11 @@ app = FastAPI(
 # This explicitly signals the browser to permit cross-origin JavaScript requests.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],             # Allows requests from any frontend address (local file, Live Server, etc.)
+    # REPLACE ["*"] with your exact local frontend URLs
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
     allow_credentials=True,
-    allow_methods=["*"],             # Allows GET, POST, OPTIONS, etc.
-    allow_headers=["*"],             # Allows headers like Content-Type
+    allow_methods=["*"],             
+    allow_headers=["*"],             
 )
 
 # 3. Include Workflow Routes

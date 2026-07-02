@@ -1,8 +1,8 @@
 from typing import Dict, Any
 import fitz  # pyright: ignore[reportMissingImports] # PyMuPDF
 import re
-from langchain_core.messages import SystemMessage, HumanMessage # pyright: ignore[reportMissingImports]
-from pydantic import ValidationError # pyright: ignore[reportMissingImports]
+from langchain_core.messages import SystemMessage, HumanMessage  # pyright: ignore[reportMissingImports]
+from pydantic import ValidationError  # pyright: ignore[reportMissingImports]
 
 from app.graph.state.global_state import GlobalGraphState
 from app.models.resume import StructuredResume, StructuredSkills, Project, Experience, Education
@@ -84,7 +84,7 @@ def _build_fallback_ats_report(resume: StructuredResume, jd_analysis: JDAnalysis
 
 def resume_upload_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
-    Initializes the workflow. 
+    Initializes the workflow.
     State must already contain resume_file_path and job_description_text.
     """
     return {"workflow_logs": ["Started resume_upload_node."]}
@@ -95,10 +95,10 @@ def resume_extraction_node(state: GlobalGraphState) -> Dict[str, Any]:
     Deterministic node: Extracts text from the uploaded PDF.
     """
     file_path = state.resume_file_path
-    
+
     if not file_path:
         return {"errors": ["No resume_file_path provided for extraction."]}
-        
+
     try:
         doc = fitz.open(file_path)
         text = "\n".join(page.get_text("text") for page in doc)
@@ -113,103 +113,164 @@ def resume_extraction_node(state: GlobalGraphState) -> Dict[str, Any]:
 def resume_structuring_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     LLM node: Converts raw resume text into the StructuredResume Pydantic model.
+    Primary: OpenRouter (gpt-4o-mini)  |  Fallback: Gemini (with key rotation)
     """
     resume_text = state.resume_text
-    
+
     if not resume_text:
         return {"errors": ["No resume_text found to structure."]}
-        
-    llm = get_llm("gemini").with_structured_output(StructuredResume)
-    
+
     prompt = f"Convert the following raw resume text into a structured JSON format.\n\nResume Text:\n{resume_text}"
+
+    # Primary: OpenRouter gpt-4o-mini
     try:
+        llm = get_llm("openrouter", model="openai/gpt-4o-mini").with_structured_output(StructuredResume)
         structured_resume = llm.invoke([HumanMessage(content=prompt)])
         return {
             "original_resume": structured_resume,
-            "workflow_logs": ["Successfully structured resume via LLM."]
+            "workflow_logs": ["[OpenRouter/gpt-4o-mini] Successfully structured resume."]
         }
     except ValidationError as e:
         return {"errors": [f"SchemaValidationError: {str(e)}"]}
+    except Exception as primary_err:
+        pass  # fall through to Gemini
+
+    # Fallback: Gemini with key rotation
+    try:
+        llm = get_llm("gemini").with_structured_output(StructuredResume)
+        structured_resume = llm.invoke([HumanMessage(content=prompt)])
+        return {
+            "original_resume": structured_resume,
+            "workflow_logs": ["[Gemini fallback] Successfully structured resume."]
+        }
     except Exception as e:
         fallback_resume = _build_fallback_resume(resume_text)
         return {
             "original_resume": fallback_resume,
-            "workflow_logs": [f"Used fallback resume parsing because LLM failed: {e}"]
+            "workflow_logs": [f"[Hard fallback] Used static parsing. Primary & Gemini both failed: {e}"]
         }
 
 
 def jd_analysis_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     LLM node: Analyzes the Job Description text.
+    Primary: OpenRouter (gpt-4o-mini)  |  Fallback: Gemini (with key rotation)
     """
     jd_text = state.job_description_text
-    
+
     if not jd_text:
         return {"errors": ["No job_description_text found."]}
-        
-    llm = get_llm("gemini").with_structured_output(JDAnalysis)
-    
+
     prompt = f"Analyze the following Job Description and extract the key requirements, skills, and tools.\n\nJD:\n{jd_text}"
-    
+
+    # Primary: OpenRouter gpt-4o-mini
     try:
+        llm = get_llm("openrouter", model="openai/gpt-4o-mini").with_structured_output(JDAnalysis)
         jd_analysis = llm.invoke([HumanMessage(content=prompt)])
         return {
             "jd_analysis": jd_analysis,
-            "workflow_logs": ["Successfully analyzed job description."]
+            "workflow_logs": ["[OpenRouter/gpt-4o-mini] Successfully analyzed job description."]
+        }
+    except Exception:
+        pass  # fall through to Gemini
+
+    # Fallback: Gemini with key rotation
+    try:
+        llm = get_llm("gemini").with_structured_output(JDAnalysis)
+        jd_analysis = llm.invoke([HumanMessage(content=prompt)])
+        return {
+            "jd_analysis": jd_analysis,
+            "workflow_logs": ["[Gemini fallback] Successfully analyzed job description."]
         }
     except Exception as e:
         fallback_jd = _build_fallback_jd_analysis(jd_text)
         return {
             "jd_analysis": fallback_jd,
-            "workflow_logs": [f"Used fallback JD analysis because LLM failed: {e}"]
+            "workflow_logs": [f"[Hard fallback] Used static JD analysis. Both providers failed: {e}"]
         }
 
 
 def ats_evaluation_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     Hybrid node: Deterministic exact match + LLM semantic match.
+    Primary: OpenRouter (gpt-4o-mini)  |  Fallback: Gemini (with key rotation)
     Reads: original_resume, jd_analysis
     Writes: ats_report
     """
     resume = state.original_resume
     jd_analysis = state.jd_analysis
-    
+
     if not resume or not jd_analysis:
         return {"errors": ["Missing resume or jd_analysis for ATS evaluation."]}
-    
+
     resume_skills_lower = set(s.lower() for s in resume.skills.languages + resume.skills.frameworks + resume.skills.tools + resume.skills.databases + resume.skills.concepts)
     jd_skills_lower = set(s.lower() for s in jd_analysis.required_skills)
-    
+
     exact_matches = resume_skills_lower.intersection(jd_skills_lower)
     missing_skills = list(jd_skills_lower - resume_skills_lower)
-    
     deterministic_score = len(exact_matches) / max(len(jd_skills_lower), 1) * 50.0
-    
-    llm = get_llm("groq").with_structured_output(ATSReport)
-    
+
     prompt = f"""
     Evaluate the resume against the job description.
     Resume Skills: {resume.skills}
     Resume Projects: {[p.title for p in resume.projects]}
     JD Required Skills: {jd_analysis.required_skills}
     JD Responsibilities: {jd_analysis.responsibilities}
-    
-    The deterministic keyword match found these missing skills: {missing_skills}.
-    Assess the semantic fit (transferable skills, contextual alignment).
-    Provide a final ATSReport. The score should be out of 100, incorporating the deterministic findings.
+
+    Deterministic keyword match found these missing skills: {missing_skills}.
+    Assess semantic fit (transferable skills, contextual alignment).
+    Provide a final ATSReport with a score out of 100.
     """
-    
+
+    # Primary: OpenRouter gpt-4o-mini
     try:
+        llm = get_llm("openrouter", model="openai/gpt-4o-mini").with_structured_output(ATSReport)
         ats_report = llm.invoke([HumanMessage(content=prompt)])
         ats_report.matched_skills = list(set(ats_report.matched_skills + list(exact_matches)))
         return {
             "ats_report": ats_report,
-            "workflow_logs": ["Successfully ran hybrid ATS evaluation."]
+            "workflow_logs": ["[OpenRouter/gpt-4o-mini] Successfully ran hybrid ATS evaluation."]
+        }
+    except Exception:
+        pass  # fall through to Gemini
+
+    # Fallback: Gemini with key rotation
+    try:
+        llm = get_llm("gemini").with_structured_output(ATSReport)
+        ats_report = llm.invoke([HumanMessage(content=prompt)])
+        ats_report.matched_skills = list(set(ats_report.matched_skills + list(exact_matches)))
+        return {
+            "ats_report": ats_report,
+            "workflow_logs": ["[Gemini fallback] Successfully ran ATS evaluation."]
         }
     except Exception as e:
         fallback_ats = _build_fallback_ats_report(resume, jd_analysis)
         fallback_ats.score = round(max(fallback_ats.score, deterministic_score), 1)
         return {
             "ats_report": fallback_ats,
-            "workflow_logs": [f"Used fallback ATS scoring because LLM failed: {e}"]
+            "workflow_logs": [f"[Hard fallback] Used static ATS scoring. Both providers failed: {e}"]
         }
+
+
+def trigger_background_workers_node(state: GlobalGraphState, config: dict) -> Dict[str, Any]:
+    """
+    Triggers detached async workers for interview and outreach generation.
+    These run independently and do not block the LangGraph HITL pipeline.
+    """
+    import threading
+    from app.workers.background_jobs import run_interview_worker_sync, run_outreach_worker_sync
+    
+    thread_id = config.get("configurable", {}).get("thread_id")
+    if not thread_id:
+        return {"errors": ["No thread_id found in config for trigger_background_workers_node"]}
+        
+    resume = state.original_resume
+    jd = state.jd_analysis
+    
+    # Fire and forget
+    threading.Thread(target=run_interview_worker_sync, args=(thread_id, resume, jd), daemon=True).start()
+    threading.Thread(target=run_outreach_worker_sync, args=(thread_id, resume, jd), daemon=True).start()
+
+    return {
+        "workflow_logs": ["Triggered detached background workers for interview and outreach."]
+    }
