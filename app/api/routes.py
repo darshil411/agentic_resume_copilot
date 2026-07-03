@@ -2,13 +2,15 @@ import os
 import shutil
 import uuid
 import json
-from typing import Optional, List
+import threading
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from langgraph.types import Command
 
 from app.graph.builders.main_graph import build_main_graph
 from app.utils.sqlite_checkpoint import get_checkpointer
@@ -17,7 +19,6 @@ from app.workers.background_jobs import init_bg_slot, get_interview_result, get_
 from app.api.dtos.enums import WorkflowStatus
 from app.api.dtos.workflow_dto import WorkflowMetadataDTO, BranchStatuses
 from app.api.dtos.review_task_dto import ReviewTaskDTO
-# FIX: Restored InterviewQuestionDTO to prevent 500 serialization crashes
 from app.api.dtos.interview_dto import InterviewDeckDTO, InterviewQuestionDTO
 from app.api.dtos.outreach_dto import OutreachWorkspaceDTO, OutreachCardDTO
 
@@ -34,7 +35,12 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 _run_status: dict[str, str] = {}
 _workflow_creation_times: dict[str, datetime] = {}
 _task_versions: dict[str, dict[str, int]] = {}
+_thread_locks: dict[str, threading.Lock] = {}
 
+def _get_lock(thread_id: str) -> threading.Lock:
+    if thread_id not in _thread_locks:
+        _thread_locks[thread_id] = threading.Lock()
+    return _thread_locks[thread_id]
 
 def _get_run_status(thread_id: str) -> WorkflowStatus:
     status = _run_status.get(thread_id, "running")
@@ -45,57 +51,6 @@ def _get_run_status(thread_id: str) -> WorkflowStatus:
     if status == "action_required":
         return WorkflowStatus.ACTION_REQUIRED
     return WorkflowStatus.PROCESSING
-
-
-def _run_graph_background(thread_id: str, initial_state: dict) -> None:
-    config = {"configurable": {"thread_id": thread_id}}
-    try:
-        _run_status[thread_id] = "running"
-        app_graph.invoke(initial_state, config=config)
-        
-        state_snapshot = app_graph.get_state(config)
-        _, _, _, is_interrupted = _extract_state(thread_id)
-
-        if is_interrupted:
-            _run_status[thread_id] = "action_required"
-        elif state_snapshot.next:
-            _run_status[thread_id] = "running"
-        else:
-            _run_status[thread_id] = "done"
-    except Exception as exc:
-        _run_status[thread_id] = f"error: {exc}"
-
-
-def _resume_graph_background(thread_id: str) -> None:
-    config = {"configurable": {"thread_id": thread_id}}
-    try:
-        _run_status[thread_id] = "running"
-        
-        # FIX: Bulletproof invocation that handles both normal unpause and LangGraph Command requirements
-        try:
-            app_graph.invoke(None, config=config)
-        except Exception as invoke_err:
-            if "resume" in str(invoke_err).lower() or "interrupt" in str(invoke_err).lower():
-                try:
-                    from langgraph.types import Command
-                    app_graph.invoke(Command(resume="continue"), config=config)
-                except ImportError:
-                    pass
-            else:
-                raise invoke_err
-        
-        state_snapshot = app_graph.get_state(config)
-        _, _, _, is_interrupted = _extract_state(thread_id)
-
-        if is_interrupted:
-            _run_status[thread_id] = "action_required"
-        elif state_snapshot.next:
-            _run_status[thread_id] = "running"
-        else:
-            _run_status[thread_id] = "done"
-    except Exception as exc:
-        _run_status[thread_id] = f"error: {exc}"
-
 
 def _safe_to_dict(obj) -> dict:
     if obj is None:
@@ -111,67 +66,77 @@ def _safe_to_dict(obj) -> dict:
     except Exception:
         return {}
 
+def _format_content_for_ui(content: Any) -> str:
+    """FIX: Robust serializer to ensure Lists/Dicts render correctly in React textareas."""
+    if not content:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        formatted = []
+        for item in content:
+            if isinstance(item, dict):
+                formatted.append(json.dumps(item, indent=2))
+            else:
+                formatted.append(str(item))
+        return "\n\n".join(formatted)
+    if isinstance(content, dict):
+        return json.dumps(content, indent=2)
+    return str(content)
 
 def _extract_state(thread_id: str):
-    """
-    FIX: Deeply extracts target_config for the specific subgraph that is paused.
-    This prevents the 500 error when applying 'as_node' to a subgraph node.
-    """
     config = {"configurable": {"thread_id": thread_id}}
-    target_config = config
-    
     try:
         state_snapshot = app_graph.get_state(config)
     except Exception:
-        return {}, [], config, False
+        return {}, False, {}
 
     values = _safe_to_dict(getattr(state_snapshot, "values", {}))
-    all_next_nodes = list(state_snapshot.next) if getattr(state_snapshot, "next", None) else []
     is_interrupted = False
+    interrupt_payload = {}
 
-    if hasattr(state_snapshot, "tasks") and state_snapshot.tasks:
+    if getattr(state_snapshot, "tasks", None):
         for task in state_snapshot.tasks:
-            task_state = getattr(task, "state", None)
-            
-            # Lock onto the exact subgraph config if an interrupt is detected
             if getattr(task, "interrupts", ()):
                 is_interrupted = True
-                if task_state and hasattr(task_state, "config"):
-                    target_config = task_state.config
-
-            if not task_state:
-                continue
-
-            if hasattr(task_state, "next") and task_state.next:
-                all_next_nodes.extend(list(task_state.next))
-                if hasattr(task_state, "config") and not is_interrupted:
-                    target_config = task_state.config
-
-            task_values = _safe_to_dict(getattr(task_state, "values", task_state))
-            for k, v in task_values.items():
-                if v is not None:
-                    values[k] = v
-
-            # Drill into sub-tasks
-            if hasattr(task_state, "tasks") and task_state.tasks:
+                if len(task.interrupts) > 0 and hasattr(task.interrupts[0], "value"):
+                    interrupt_payload = task.interrupts[0].value
+            
+            task_state = getattr(task, "state", None)
+            if task_state and getattr(task_state, "tasks", None):
                 for subtask in task_state.tasks:
-                    sub_state = getattr(subtask, "state", None)
                     if getattr(subtask, "interrupts", ()):
                         is_interrupted = True
-                        if sub_state and hasattr(sub_state, "config"):
-                            target_config = sub_state.config
-                    
-                    if sub_state:
-                        if hasattr(sub_state, "next") and sub_state.next:
-                            all_next_nodes.extend(list(sub_state.next))
-                            
-                        sub_values = _safe_to_dict(getattr(sub_state, "values", sub_state))
-                        for k, v in sub_values.items():
-                            if v is not None:
-                                values[k] = v
+                        if len(subtask.interrupts) > 0 and hasattr(subtask.interrupts[0], "value"):
+                            interrupt_payload = subtask.interrupts[0].value
 
-    return values, all_next_nodes, target_config, is_interrupted
+    return values, is_interrupted, interrupt_payload
 
+def _advance_graph(thread_id: str, command=None, initial_state=None) -> None:
+    lock = _get_lock(thread_id)
+    if not lock.acquire(blocking=False):
+        return
+
+    try:
+        _run_status[thread_id] = "running"
+        config = {"configurable": {"thread_id": thread_id}}
+        payload = command if command is not None else initial_state
+        
+        app_graph.invoke(payload, config=config)
+
+        _, is_interrupted, _ = _extract_state(thread_id)
+        state_snapshot = app_graph.get_state(config)
+
+        if is_interrupted:
+            _run_status[thread_id] = "action_required"
+        elif getattr(state_snapshot, "next", None):
+            _run_status[thread_id] = "running"
+        else:
+            _run_status[thread_id] = "done"
+    except Exception as exc:
+        _run_status[thread_id] = f"error: {exc}"
+    finally:
+        lock.release()
 
 @router.post("/workflow/start")
 async def start_workflow(
@@ -187,7 +152,6 @@ async def start_workflow(
         shutil.copyfileobj(resume.file, f)
 
     thread_id = str(uuid.uuid4())
-    _run_status[thread_id] = "running"
     _workflow_creation_times[thread_id] = datetime.now()
     _task_versions[thread_id] = {}
     init_bg_slot(thread_id)
@@ -201,18 +165,13 @@ async def start_workflow(
         "branch_status": {}
     }
 
-    background_tasks.add_task(_run_graph_background, thread_id, initial_state)
+    background_tasks.add_task(_advance_graph, thread_id, None, initial_state)
     return {"thread_id": thread_id, "status": "RUNNING"}
-
 
 @router.get("/workflow/{thread_id}", response_model=WorkflowMetadataDTO)
 async def get_workflow_metadata(thread_id: str):
-    values, all_next_nodes, _, is_interrupted = _extract_state(thread_id)
-    overall_status = _get_run_status(thread_id)
-
-    if is_interrupted or "approval_processing_node" in all_next_nodes:
-        overall_status = WorkflowStatus.ACTION_REQUIRED
-
+    values, is_interrupted, _ = _extract_state(thread_id)
+    overall_status = WorkflowStatus.ACTION_REQUIRED if is_interrupted else _get_run_status(thread_id)
     branch_status_dict = values.get("branch_status", {})
 
     def _parse_branch(b_name: str) -> WorkflowStatus:
@@ -226,20 +185,14 @@ async def get_workflow_metadata(thread_id: str):
                 return WorkflowStatus.PROCESSING
         return overall_status if overall_status != WorkflowStatus.ACTION_REQUIRED else WorkflowStatus.PROCESSING
 
-    r_branch = _parse_branch("resume_branch")
-    if is_interrupted or "approval_processing_node" in all_next_nodes:
-        r_branch = WorkflowStatus.ACTION_REQUIRED
-        
+    r_branch = WorkflowStatus.ACTION_REQUIRED if is_interrupted else _parse_branch("resume_branch")
     interview_slot = get_interview_result(thread_id)
-    interview_status = WorkflowStatus(interview_slot.get("status", "PROCESSING"))
-    
     outreach_slot = get_outreach_result(thread_id)
-    outreach_status = WorkflowStatus(outreach_slot.get("status", "PROCESSING"))
 
     branches = BranchStatuses(
         resume_branch=r_branch,
-        interview_branch=interview_status,
-        outreach_branch=outreach_status
+        interview_branch=WorkflowStatus(interview_slot.get("status", "PROCESSING")),
+        outreach_branch=WorkflowStatus(outreach_slot.get("status", "PROCESSING"))
     )
 
     return WorkflowMetadataDTO(
@@ -251,36 +204,34 @@ async def get_workflow_metadata(thread_id: str):
         completed_sections=[]
     )
 
-
 @router.get("/resume/task/current/{thread_id}", response_model=ReviewTaskDTO)
 async def get_current_resume_task(thread_id: str):
     try:
-        values, all_next_nodes, _, is_interrupted = _extract_state(thread_id)
+        values, is_interrupted, interrupt_payload = _extract_state(thread_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to extract graph state: {exc}")
 
-    section = values.get("current_section") or "summary"
     overall_status = _get_run_status(thread_id)
-    
-    is_paused = is_interrupted or "approval_processing_node" in all_next_nodes or overall_status == WorkflowStatus.ACTION_REQUIRED
-    status = WorkflowStatus.ACTION_REQUIRED if is_paused else overall_status
+    status = WorkflowStatus.ACTION_REQUIRED if is_interrupted else overall_status
+
+    if is_interrupted and interrupt_payload and interrupt_payload.get("type") == "resume_review":
+        section = interrupt_payload.get("section", "summary")
+        raw_proposal = interrupt_payload.get("proposal", {})
+    else:
+        section = values.get("current_section") or "summary"
+        raw_proposal = _safe_to_dict(values.get("proposed_changes") or {})
 
     if thread_id not in _task_versions:
         _task_versions[thread_id] = {}
     if section not in _task_versions[thread_id]:
         _task_versions[thread_id][section] = 1
 
-    raw_proposal = _safe_to_dict(values.get("proposed_changes") or {})
-    proposal_text = raw_proposal.get("new_content", "")
+    # FIX: Robust serialization so UI never receives broken objects
+    proposal_text = _format_content_for_ui(raw_proposal.get("new_content", ""))
     reasoning_text = raw_proposal.get("reasoning", "")
 
     raw_original = _safe_to_dict(values.get("original_resume") or {})
-    section_original = raw_original.get(section, "")
-    if not isinstance(section_original, str):
-        try:
-            section_original = json.dumps(section_original, indent=2)
-        except Exception:
-            section_original = str(section_original)
+    section_original = _format_content_for_ui(raw_original.get(section, ""))
 
     return ReviewTaskDTO(
         task_id=f"task_{thread_id}_{section}",
@@ -295,95 +246,43 @@ async def get_current_resume_task(thread_id: str):
         proposal_history=[]
     )
 
-
 class TaskApprovalRequest(BaseModel):
     task_id: str
     version: int
     feedback: str = ""
 
-
 @router.post("/resume/task/approve/{thread_id}")
 async def approve_resume_task(thread_id: str, request: TaskApprovalRequest, background_tasks: BackgroundTasks):
-    values, all_next_nodes, target_config, is_interrupted = _extract_state(thread_id)
-    overall_status = _get_run_status(thread_id)
+    values, is_interrupted, interrupt_payload = _extract_state(thread_id)
     
-    if not is_interrupted and "approval_processing_node" not in all_next_nodes and overall_status != WorkflowStatus.ACTION_REQUIRED:
-        raise HTTPException(status_code=409, detail="Task not in ACTION_REQUIRED state")
+    if not is_interrupted:
+        return {"status": "ignored", "detail": "Task is already processing"}
 
-    section = values.get("current_section", "summary")
-    current_ver = _task_versions.get(thread_id, {}).get(section, 1)
-    if request.version != current_ver:
-        raise HTTPException(status_code=409, detail="Task version mismatch")
-
-    # FIX: Try to safely force bypass the node to prevent infinite loops. If config fails, fallback safely.
-    state_payload = {
-        "approval_state": {section: "approved"},
-        "human_feedback": {section: request.feedback}
-    }
-    
-    try:
-        app_graph.update_state(target_config, state_payload, as_node="approval_processing_node")
-    except Exception:
-        app_graph.update_state(target_config, state_payload)
-
-    background_tasks.add_task(_resume_graph_background, thread_id)
+    background_tasks.add_task(_advance_graph, thread_id, Command(resume={"action": "approve", "feedback": request.feedback}))
     return {"status": "success"}
-
 
 @router.post("/resume/task/regenerate/{thread_id}")
 async def regenerate_resume_task(thread_id: str, request: TaskApprovalRequest, background_tasks: BackgroundTasks):
-    values, all_next_nodes, target_config, is_interrupted = _extract_state(thread_id)
-    overall_status = _get_run_status(thread_id)
+    values, is_interrupted, interrupt_payload = _extract_state(thread_id)
 
-    if not is_interrupted and "approval_processing_node" not in all_next_nodes and overall_status != WorkflowStatus.ACTION_REQUIRED:
-        raise HTTPException(status_code=409, detail="Task not in ACTION_REQUIRED state")
+    if not is_interrupted:
+        return {"status": "ignored", "detail": "Task is already processing"}
 
-    section = values.get("current_section", "summary")
-    current_ver = _task_versions.get(thread_id, {}).get(section, 1)
-    if request.version != current_ver:
-        raise HTTPException(status_code=409, detail="Task version mismatch")
+    section = interrupt_payload.get("section", "summary") if interrupt_payload else "summary"
+    _task_versions[thread_id][section] = _task_versions.get(thread_id, {}).get(section, 1) + 1
 
-    _task_versions[thread_id][section] = current_ver + 1
-
-    state_payload = {
-        "approval_state": {section: "rejected"},
-        "human_feedback": {section: request.feedback}
-    }
-    
-    try:
-        app_graph.update_state(target_config, state_payload, as_node="approval_processing_node")
-    except Exception:
-        app_graph.update_state(target_config, state_payload)
-
-    background_tasks.add_task(_resume_graph_background, thread_id)
+    background_tasks.add_task(_advance_graph, thread_id, Command(resume={"action": "reject", "feedback": request.feedback}))
     return {"status": "success"}
-
 
 @router.post("/resume/task/skip/{thread_id}")
 async def skip_resume_task(thread_id: str, request: TaskApprovalRequest, background_tasks: BackgroundTasks):
-    values, all_next_nodes, target_config, is_interrupted = _extract_state(thread_id)
-    overall_status = _get_run_status(thread_id)
+    values, is_interrupted, _ = _extract_state(thread_id)
 
-    if not is_interrupted and "approval_processing_node" not in all_next_nodes and overall_status != WorkflowStatus.ACTION_REQUIRED:
-        raise HTTPException(status_code=409, detail="Task not in ACTION_REQUIRED state")
+    if not is_interrupted:
+        return {"status": "ignored", "detail": "Task is already processing"}
 
-    section = values.get("current_section", "summary")
-    current_ver = _task_versions.get(thread_id, {}).get(section, 1)
-    if request.version != current_ver:
-        raise HTTPException(status_code=409, detail="Task version mismatch")
-
-    state_payload = {
-        "approval_state": {section: "skipped"}
-    }
-    
-    try:
-        app_graph.update_state(target_config, state_payload, as_node="approval_processing_node")
-    except Exception:
-        app_graph.update_state(target_config, state_payload)
-
-    background_tasks.add_task(_resume_graph_background, thread_id)
+    background_tasks.add_task(_advance_graph, thread_id, Command(resume={"action": "skip", "feedback": ""}))
     return {"status": "success"}
-
 
 @router.get("/interview/{thread_id}", response_model=InterviewDeckDTO)
 async def get_interview_data(thread_id: str):
@@ -405,7 +304,6 @@ async def get_interview_data(thread_id: str):
             ))
 
     return InterviewDeckDTO(thread_id=thread_id, status=status, questions=questions)
-
 
 @router.get("/outreach/{thread_id}", response_model=OutreachWorkspaceDTO)
 async def get_outreach_data(thread_id: str):
@@ -438,10 +336,9 @@ async def get_outreach_data(thread_id: str):
         followups=followups
     )
 
-
 @router.get("/exports/{thread_id}/resume")
 async def download_resume(thread_id: str):
-    values, _, _, _ = _extract_state(thread_id)
+    values, _, _ = _extract_state(thread_id)
     optimized = values.get("optimized_resume")
     if not optimized:
         raise HTTPException(status_code=404, detail="Optimized resume not ready yet.")
@@ -463,10 +360,7 @@ async def download_resume(thread_id: str):
             content.append(f"--- {section.upper()} ---")
             if isinstance(text, list):
                 for item in text:
-                    if isinstance(item, dict):
-                        content.append(str(item))
-                    else:
-                        content.append(str(item))
+                    content.append(str(item))
             elif isinstance(text, dict):
                 for k, v in text.items():
                     content.append(f"{k}: {', '.join(v) if isinstance(v, list) else v}")
@@ -480,7 +374,6 @@ async def download_resume(thread_id: str):
         "\n".join(content),
         headers={"Content-Disposition": "attachment; filename=optimized_resume.txt"}
     )
-
 
 @router.get("/exports/{thread_id}/interview")
 async def download_interview(thread_id: str):
@@ -507,7 +400,6 @@ async def download_interview(thread_id: str):
         "\n".join(content),
         headers={"Content-Disposition": "attachment; filename=interview_prep.txt"}
     )
-
 
 @router.get("/exports/{thread_id}/outreach")
 async def download_outreach(thread_id: str):
@@ -539,29 +431,23 @@ async def download_outreach(thread_id: str):
         headers={"Content-Disposition": "attachment; filename=outreach_toolkit.txt"}
     )
 
-
 @router.get("/exports/{thread_id}")
 async def get_exports_data(thread_id: str):
-    values, _, _, _ = _extract_state(thread_id)
+    values, _, _ = _extract_state(thread_id)
 
     resume_ready = values.get("optimized_resume") is not None
-    
     interview_slot = get_interview_result(thread_id)
-    interview_ready = interview_slot.get("status") == "COMPLETED"
-    
     outreach_slot = get_outreach_result(thread_id)
-    outreach_ready = outreach_slot.get("status") == "COMPLETED"
 
     return {
         "resume_pdf": WorkflowStatus.READY.value if resume_ready else WorkflowStatus.PROCESSING.value,
-        "interview_pdf": WorkflowStatus.READY.value if interview_ready else WorkflowStatus.PROCESSING.value,
-        "outreach_zip": WorkflowStatus.READY.value if outreach_ready else WorkflowStatus.PROCESSING.value,
+        "interview_pdf": WorkflowStatus.READY.value if interview_slot.get("status") == "COMPLETED" else WorkflowStatus.PROCESSING.value,
+        "outreach_zip": WorkflowStatus.READY.value if outreach_slot.get("status") == "COMPLETED" else WorkflowStatus.PROCESSING.value,
     }
-
 
 @router.get("/original-resume/{thread_id}")
 async def get_original_resume(thread_id: str):
-    values, _, _, _ = _extract_state(thread_id)
+    values, _, _ = _extract_state(thread_id)
     original = values.get("original_resume")
     if not original:
         raise HTTPException(status_code=404, detail="Original resume not yet extracted.")

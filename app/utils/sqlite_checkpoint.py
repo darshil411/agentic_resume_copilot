@@ -25,6 +25,11 @@ def get_checkpointer():
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
         conn = sqlite3.connect(db_path, check_same_thread=False)
+        
+        # FIX: Enable WAL mode to allow concurrent background writing and API reading
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        
         print(f"[checkpointer] Using SqliteSaver at {db_path}")
         return SqliteSaver(conn)
 
@@ -41,6 +46,11 @@ def get_checkpointer():
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
         conn = sqlite3.connect(db_path, check_same_thread=False)
+        
+        # FIX: Enable WAL mode to allow concurrent background writing and API reading
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        
         print(f"[checkpointer] Using SqliteSaver (external pkg) at {db_path}")
         return SqliteSaver(conn)
 
