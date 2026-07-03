@@ -27,6 +27,19 @@ export const resumeService = {
      * @param {string} threadId 
      * @param {string} taskId 
      * @param {number} version 
+     */
+    async skipTask(threadId, taskId, version) {
+        return await fetchJson(`/resume/task/skip/${threadId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_id: taskId, version, feedback: "" })
+        });
+    },
+
+    /**
+     * @param {string} threadId 
+     * @param {string} taskId 
+     * @param {number} version 
      * @param {string} feedback 
      */
     async regenerateTask(threadId, taskId, version, feedback) {

@@ -2,6 +2,7 @@ from typing import Dict, Any
 import fitz  # pyright: ignore[reportMissingImports] # PyMuPDF
 import re
 from langchain_core.messages import SystemMessage, HumanMessage  # pyright: ignore[reportMissingImports]
+from langchain_core.runnables import RunnableConfig  # pyright: ignore[reportMissingImports]
 from pydantic import ValidationError  # pyright: ignore[reportMissingImports]
 
 from app.graph.state.global_state import GlobalGraphState
@@ -252,7 +253,7 @@ def ats_evaluation_node(state: GlobalGraphState) -> Dict[str, Any]:
         }
 
 
-def trigger_background_workers_node(state: GlobalGraphState, config: dict) -> Dict[str, Any]:
+def trigger_background_workers_node(state: GlobalGraphState, config: RunnableConfig) -> Dict[str, Any]:
     """
     Triggers detached async workers for interview and outreach generation.
     These run independently and do not block the LangGraph HITL pipeline.
@@ -260,7 +261,7 @@ def trigger_background_workers_node(state: GlobalGraphState, config: dict) -> Di
     import threading
     from app.workers.background_jobs import run_interview_worker_sync, run_outreach_worker_sync
     
-    thread_id = config.get("configurable", {}).get("thread_id")
+    thread_id = (config or {}).get("configurable", {}).get("thread_id")
     if not thread_id:
         return {"errors": ["No thread_id found in config for trigger_background_workers_node"]}
         

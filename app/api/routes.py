@@ -412,6 +412,113 @@ async def get_outreach_data(thread_id: str):
     )
 
 
+# IMPORTANT: Specific sub-routes MUST be declared before the parameterized parent
+# route /exports/{thread_id} to avoid FastAPI matching /exports/{thread_id}/resume
+# as thread_id="<id>/resume".
+
+@router.get("/exports/{thread_id}/resume")
+async def download_resume(thread_id: str):
+    values, _, _ = _extract_state(thread_id)
+    optimized = values.get("optimized_resume")
+    if not optimized:
+        raise HTTPException(status_code=404, detail="Optimized resume not ready yet.")
+        
+    content = []
+    if isinstance(optimized, dict):
+        # Header info
+        name = optimized.get("name", "")
+        if name:
+            content.append(name)
+        contact_parts = [v for k, v in optimized.items() if k in ("email", "phone", "city", "linkedin") and v]
+        if contact_parts:
+            content.append(" | ".join(contact_parts))
+        content.append("")
+        
+        for section in ("summary", "skills", "experience", "projects", "education", "certifications"):
+            text = optimized.get(section)
+            if not text:
+                continue
+            content.append(f"--- {section.upper()} ---")
+            if isinstance(text, list):
+                for item in text:
+                    if isinstance(item, dict):
+                        # experience / projects / education
+                        content.append(str(item))
+                    else:
+                        content.append(str(item))
+            elif isinstance(text, dict):
+                for k, v in text.items():
+                    content.append(f"{k}: {', '.join(v) if isinstance(v, list) else v}")
+            else:
+                content.append(str(text))
+            content.append("")
+    else:
+        content.append(str(optimized))
+        
+    return PlainTextResponse(
+        "\n".join(content),
+        headers={"Content-Disposition": "attachment; filename=optimized_resume.txt"}
+    )
+
+
+@router.get("/exports/{thread_id}/interview")
+async def download_interview(thread_id: str):
+    slot = get_interview_result(thread_id)
+    if slot.get("status") != "COMPLETED":
+        raise HTTPException(status_code=404, detail="Interview deck not ready yet.")
+        
+    data = slot.get("data") or {}
+    questions = data.get("interview_questions") or []
+    
+    content = ["--- INTERVIEW STRATEGY DECK ---", ""]
+    for idx, q in enumerate(questions):
+        if isinstance(q, dict):
+            content.append(f"Q{idx+1}: {q.get('question', '')}")
+            ans = q.get('answer') or q.get('suggested_answer', '')
+            if ans:
+                content.append(f"A: {ans}")
+            content.append("")
+        else:
+            content.append(f"Q{idx+1}: {q}")
+            content.append("")
+            
+    return PlainTextResponse(
+        "\n".join(content),
+        headers={"Content-Disposition": "attachment; filename=interview_prep.txt"}
+    )
+
+
+@router.get("/exports/{thread_id}/outreach")
+async def download_outreach(thread_id: str):
+    slot = get_outreach_result(thread_id)
+    if slot.get("status") != "COMPLETED":
+        raise HTTPException(status_code=404, detail="Outreach toolkit not ready yet.")
+        
+    data = slot.get("data") or {}
+    
+    content = ["--- OUTREACH TOOLKIT ---", ""]
+    
+    for idx, email in enumerate(data.get("cold_emails", [])):
+        content.append(f"COLD EMAIL {idx+1}:")
+        content.append(str(email))
+        content.append("")
+        
+    for idx, ref in enumerate(data.get("referral_templates", [])):
+        content.append(f"REFERRAL REQUEST {idx+1}:")
+        content.append(str(ref))
+        content.append("")
+        
+    for idx, f in enumerate(data.get("followup_templates", [])):
+        content.append(f"FOLLOW-UP {idx+1}:")
+        content.append(str(f))
+        content.append("")
+            
+    return PlainTextResponse(
+        "\n".join(content),
+        headers={"Content-Disposition": "attachment; filename=outreach_toolkit.txt"}
+    )
+
+
 @router.get("/exports/{thread_id}")
 async def get_exports_data(thread_id: str):
     values, _, _ = _extract_state(thread_id)
@@ -430,80 +537,15 @@ async def get_exports_data(thread_id: str):
         "outreach_zip": WorkflowStatus.READY.value if outreach_ready else WorkflowStatus.PROCESSING.value,
     }
 
-@router.get("/exports/{thread_id}/resume")
-async def download_resume(thread_id: str):
+
+@router.get("/original-resume/{thread_id}")
+async def get_original_resume(thread_id: str):
+    """Returns the structured original resume as soon as extraction is complete."""
     values, _, _ = _extract_state(thread_id)
-    optimized = values.get("optimized_resume")
-    if not optimized:
-        raise HTTPException(status_code=404, detail="Optimized resume not ready yet.")
-        
-    # Render basic plain text
-    content = []
-    if isinstance(optimized, dict):
-        for section, text in optimized.items():
-            if section not in ("name", "email", "phone", "city", "linkedin", "github", "portfolio", "certifications"):
-                content.append(f"--- {section.upper()} ---")
-                if isinstance(text, list):
-                    content.append("\n".join(str(i) for i in text))
-                else:
-                    content.append(str(text))
-                content.append("\n")
-    else:
-        content.append(str(optimized))
-        
-    return PlainTextResponse(
-        "\n".join(content),
-        headers={"Content-Disposition": "attachment; filename=optimized_resume.txt"}
-    )
-
-@router.get("/exports/{thread_id}/interview")
-async def download_interview(thread_id: str):
-    slot = get_interview_result(thread_id)
-    if slot.get("status") != "COMPLETED":
-        raise HTTPException(status_code=404, detail="Interview deck not ready yet.")
-        
-    data = slot.get("data") or {}
-    questions = data.get("interview_questions") or []
-    
-    content = ["--- INTERVIEW STRATEGY DECK ---\n"]
-    for q in questions:
-        if isinstance(q, dict):
-            content.append(f"Q: {q.get('question', '')}")
-            content.append(f"A: {q.get('answer', q.get('suggested_answer', ''))}\n")
-        else:
-            content.append(str(q))
-            
-    return PlainTextResponse(
-        "\n".join(content),
-        headers={"Content-Disposition": "attachment; filename=interview_prep.txt"}
-    )
-
-@router.get("/exports/{thread_id}/outreach")
-async def download_outreach(thread_id: str):
-    slot = get_outreach_result(thread_id)
-    if slot.get("status") != "COMPLETED":
-        raise HTTPException(status_code=404, detail="Outreach toolkit not ready yet.")
-        
-    data = slot.get("data") or {}
-    
-    content = ["--- OUTREACH TOOLKIT ---\n"]
-    
-    content.append("COLD EMAILS:")
-    for email in data.get("cold_emails", []):
-        content.append(str(email))
-        content.append("\n")
-        
-    content.append("REFERRAL REQUESTS:")
-    for ref in data.get("referral_templates", []):
-        content.append(str(ref))
-        content.append("\n")
-        
-    content.append("FOLLOW-UPS:")
-    for f in data.get("followup_templates", []):
-        content.append(str(f))
-        content.append("\n")
-            
-    return PlainTextResponse(
-        "\n".join(content),
-        headers={"Content-Disposition": "attachment; filename=outreach_toolkit.txt"}
-    )
+    original = values.get("original_resume")
+    if not original:
+        raise HTTPException(status_code=404, detail="Original resume not yet extracted.")
+    # _safe_to_dict already called inside _extract_state, original is already a dict
+    if isinstance(original, dict):
+        return original
+    return _safe_to_dict(original)

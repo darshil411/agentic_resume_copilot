@@ -1,649 +1,509 @@
-Build a production-style AI Resume Tailoring & Interview Copilot focused heavily on LangGraph orchestration patterns, modular workflow design, HITL systems, checkpointing, parallel execution, and structured state management.
+# ROLE
 
-The goal is NOT to create a flashy UI-first app.
-The goal is to demonstrate strong backend orchestration architecture using LangGraph + FastAPI.
+You are a senior AI systems architect and staff-level full-stack engineer.
 
-The implementation should prioritize:
+Your job is NOT to generate random code quickly.
 
-* clean state design
-* modular nodes
-* deterministic routing
-* structured outputs
-* checkpoint-safe execution
-* resumability
-* scalable graph architecture
-* production-style folder structure
-* beginner-readable but industry-style code
+Your job is to:
 
-Avoid unnecessary complexity:
+* deeply understand the architecture
+* preserve workflow integrity
+* maintain scalable orchestration patterns
+* avoid fragile hacks
+* think like a production systems engineer
 
-* no multi-agent chaos
-* no unnecessary RAG
-* no overengineering
-* no huge abstractions initially
+You must carefully reason about:
 
-Core Stack:
+* LangGraph execution lifecycle
+* interrupt durability
+* workflow ownership
+* frontend/backend synchronization
+* state consistency
+* scalable async architecture
+* future extensibility
 
-* Python
-* FastAPI
+You must NOT blindly patch symptoms.
+
+Always identify:
+
+1. root cause
+2. architectural issue
+3. lifecycle issue
+4. state synchronization issue
+5. routing/orchestration issue
+
+before proposing fixes.
+
+---
+
+# PROJECT OVERVIEW
+
+We are building:
+
+# “AI Resume Tailoring & Interview Copilot”
+
+using:
+
 * LangGraph
 * LangChain
-* Pydantic
-* PyMuPDF or pdfplumber
-* OpenAI or Gemini
-* LangSmith tracing
-* Optional Tavily web search enrichment
+* FastAPI
+* React
+* Tailwind CSS
+* Structured Pydantic schemas
+* HITL workflow orchestration
 
-==================================================
-PROJECT OVERVIEW
-================
+The system allows users to:
 
-The application should:
+* upload a resume PDF
+* upload/paste a job description
+* extract and structure resume data
+* analyze JD requirements
+* calculate ATS compatibility
+* optimize resume sections
+* review section-wise AI improvements
+* approve/regenerate sections
+* generate interview preparation material
+* generate outreach/cold email templates
+* export final outputs
 
-1. Accept:
+The project is intended as:
 
-   * resume PDF
-   * job description text
+* an industry-style AI orchestration project
+* a LangGraph learning project
+* a scalable agentic workflow system
 
-2. Extract resume text
+The architecture quality matters more than speed.
 
-3. Convert raw text into structured Pydantic schema
+---
 
-4. Analyze the JD
+# CORE ENGINEERING PRINCIPLES
 
-5. Perform hybrid ATS evaluation:
+## IMPORTANT
 
-   * deterministic keyword/skill matching
-   * semantic LLM reasoning
+DO NOT:
 
-6. Launch parallel workflow branches:
+* overengineer
+* add unnecessary agents
+* add unnecessary abstractions
+* add premature RAG
+* add fragile frontend polling hacks
+* create hidden state coupling
 
-   * Resume Optimization Pipeline
-   * Interview Preparation Pipeline
-   * Outreach Generation Pipeline
+PRIORITIZE:
 
-7. Resume pipeline must include:
+* clean state flow
+* deterministic orchestration
+* durable HITL lifecycle
+* modular architecture
+* observable workflows
+* explicit routing
+* maintainable code
+* production-like patterns
 
-   * HITL approval
-   * interrupts
-   * checkpointing
-   * resumability
-   * retry loops
-   * conditional routing
+---
 
-8. Final system should support:
+# CURRENT SYSTEM DESIGN
 
-   * HTML preview
-   * PDF/DOCX export
-   * interview prep export
-   * outreach export
+# 1. Resume Input Pipeline
 
-==================================================
-IMPORTANT ARCHITECTURE DECISIONS
-================================
+User uploads resume PDF.
 
-The system should be designed as:
+Pipeline:
 
-* DAG-style orchestration
-* stateful execution engine
-* NOT simple sequential chains
+* upload
+* PDF extraction
+* resume text extraction
+* structured parsing into Pydantic schema
 
-LangGraph concepts that MUST be demonstrated:
+We use:
 
-* StateGraph
-* typed state
-* reducers
-* conditional edges
-* parallel fan-out
-* subgraphs
-* interrupts
-* checkpoint persistence
+* PyMuPDF / pdfplumber
+* structured Pydantic outputs
+
+IMPORTANT:
+The internal system must use STRUCTURED DATA, not raw text.
+
+Raw text is preserved only for:
+
+* uncategorized info
+* fallback recovery
+* parsing resilience
+
+---
+
+# 2. Structured Resume Schema
+
+The system uses strongly typed Pydantic models.
+
+Example structure:
+
+* summary
+* skills
+* projects
+* experience
+* education
+* certifications
+
+The graph state uses strict schema validation.
+
+---
+
+# 3. Job Description Analysis
+
+The JD analyzer extracts:
+
+* required skills
+* tools
+* technologies
+* responsibilities
+* keywords
+* expectations
+* experience requirements
+
+Structured outputs only.
+
+---
+
+# 4. ATS Evaluation
+
+ATS evaluation uses:
+
+* deterministic matching
+* semantic matching
+* hybrid scoring
+
+The ATS system calculates:
+
+* missing skills
+* weak alignment
+* keyword coverage
+* project relevance
+* ATS score
+
+Important:
+ATS logic should NOT rely purely on LLM judgment.
+
+Use deterministic scoring wherever possible.
+
+---
+
+# 5. Resume Optimization Workflow
+
+The system optimizes:
+
+* summary
+* skills
+* projects
+* experience
+
+VERY IMPORTANT:
+
+The system NEVER overwrites the original resume directly.
+
+State separation must exist:
+
+* original_resume
+* optimized_resume
+* proposed_changes
+
+Optimization happens section-by-section.
+
+---
+
+# 6. Human-In-The-Loop (CRITICAL)
+
+The resume pipeline uses:
+
+* LangGraph interrupts
+* checkpointing
 * resumability
-* async-safe orchestration
+* conditional routing
 
-==================================================
-CORE EXECUTION FLOW
-===================
+The user must:
 
-START
-↓
-resume_upload_node
-↓
-resume_extraction_node
-↓
-resume_structuring_node
-↓
-jd_analysis_node
-↓
-ats_evaluation_node
-↓
+* review proposed changes
+* approve
+* regenerate
+* provide feedback
 
-FAN-OUT INTO 3 PARALLEL BRANCHES:
+The system must NEVER:
 
-1. Resume Optimization Pipeline
-2. Interview Preparation Pipeline
-3. Outreach Generation Pipeline
+* auto-approve
+* skip review accidentally
+* complete workflow before HITL
 
-All branches should execute independently.
+HITL is the PRIMARY workflow lifecycle owner.
 
-Resume branch is long-running HITL workflow.
-Interview and outreach branches should complete independently and faster.
+This is extremely important.
 
-After all relevant branches complete:
-↓
-final_dashboard_node
-↓
-END
+---
 
-==================================================
-GLOBAL SHARED STATE
-===================
+# 7. Frontend Architecture
 
-Use strict Pydantic-based graph state.
+Frontend stack:
 
-Global shared state should include:
+* React
+* Tailwind CSS
+* Vite
 
-```python
-resume_text: str
+The frontend is designed like a business product/workspace.
 
-job_description_text: str
+NOT a debugging dashboard.
 
-original_resume: StructuredResume
+The UI philosophy:
 
-optimized_resume: StructuredResume | None
+* clean
+* minimal
+* professional
+* workspace-oriented
+* stable under async updates
 
-jd_analysis: JDAnalysis
+---
 
-ats_report: ATSReport
+# 8. Workspace Architecture
 
-workflow_logs: list[str]
+The frontend uses isolated workspaces:
 
-branch_status: dict
+* Resume Optimizer
+* Interview Deck
+* Outreach Toolkit
+* Export Hub
 
-errors: list[str]
-```
+Each workspace:
 
-==================================================
-LOCAL SUBGRAPH STATES
-=====================
+* manages isolated state
+* has independent polling/fetching
+* should not mutate global UI state directly
 
-Resume Pipeline Local State:
+---
 
-```python
-current_section: str
+# 9. IMPORTANT ARCHITECTURE DECISION
 
-proposed_changes: dict
+This is CRITICAL.
 
-approval_state: dict
+The project previously used:
 
-section_retry_counts: dict
+* a single parallel LangGraph fanout
+* Resume + Interview + Outreach together
 
-resume_export_paths: dict
-```
+This architecture is WRONG.
 
-Interview Pipeline Local State:
+WHY?
 
-```python
-company_research: dict
+Because:
 
-interview_questions: list
+* Resume workflow contains interrupts/HITL
+* Interview/Outreach are autonomous async tasks
 
-interview_experiences: list
+These are DIFFERENT execution models.
 
-prep_roadmap: list
+This caused:
 
-interview_export_paths: dict
-```
+* graph lifecycle corruption
+* premature completion
+* broken HITL
+* race conditions
+* incorrect workflow status
+* unstable UI behavior
 
-Outreach Pipeline Local State:
+---
 
-```python
-cold_emails: list
+# 10. NEW ORCHESTRATION ARCHITECTURE
 
-referral_templates: list
+## PRIMARY WORKFLOW (LangGraph)
 
-followup_templates: list
+The LangGraph lifecycle should ONLY own:
 
-outreach_export_paths: dict
-```
+Upload
+→ Extraction
+→ Structuring
+→ JD Analysis
+→ ATS Evaluation
+→ Resume Optimization HITL
+→ Resume Export
+→ END
 
-==================================================
-Pydantic MODELS
-===============
+This is the ONLY interrupt-controlled workflow.
 
-Implement strongly typed schemas.
+---
+
+# 11. BACKGROUND WORKERS
+
+Interview Prep and Outreach generation must become:
+
+* detached async workers
+* independent background tasks
+* NOT part of interrupt graph lifecycle
 
 Examples:
 
-```python
-class Section(str, Enum):
-    SUMMARY = "summary"
-    SKILLS = "skills"
-    PROJECTS = "projects"
-    EXPERIENCE = "experience"
+* asyncio.create_task()
+* background threads
+* async task queue
 
+These workers:
 
-class Project(BaseModel):
-    title: str
-    description: str
-    technologies: List[str]
-    impact: str | None = None
+* run independently
+* expose separate APIs
+* maintain isolated state
+* never block HITL flow
 
+---
 
-class Experience(BaseModel):
-    company: str
-    role: str
-    duration: str
-    bullets: List[str]
+# 12. WHY THIS ARCHITECTURE EXISTS
 
+Interrupt workflows require durable ownership.
 
-class StructuredResume(BaseModel):
-    summary: str
-    skills: List[str]
-    projects: List[Project]
-    experience: List[Experience]
-    education: List[str]
-    certifications: List[str]
+Autonomous async tasks should NOT share:
 
+* synchronization lifecycle
+* graph completion lifecycle
+* interrupt lifecycle
 
-class JDAnalysis(BaseModel):
-    required_skills: List[str]
-    responsibilities: List[str]
-    keywords: List[str]
-    tools: List[str]
-    experience_requirements: List[str]
+The system must scale cleanly for future:
 
+* Tavily integration
+* web research
+* websocket streaming
+* real-time updates
+* persistence layers
+* distributed execution
 
-class ATSReport(BaseModel):
-    score: float
-    matched_skills: List[str]
-    missing_skills: List[str]
-    weak_sections: List[str]
-    improvement_suggestions: List[str]
-```
+---
 
-==================================================
-NODE ARCHITECTURE
-=================
+# 13. GLOBAL STATE DESIGN
 
-Each node should clearly define:
-
-* what it reads from state
-* what it writes
-* deterministic vs LLM behavior
-* possible failure modes
-
-==================================================
-FOUNDATION NODES
-================
-
-1. resume_upload_node
-
-* stores uploaded file path
-* stores JD text
-
-2. resume_extraction_node
-   Reads:
-
-* uploaded PDF
-
-Writes:
-
-* resume_text
-
-Deterministic node.
-
-Must handle:
-
-* corrupted PDFs
-* empty PDFs
-* extraction failures
-
-3. resume_structuring_node
-   Reads:
-
-* resume_text
-
-Writes:
-
-* original_resume
-
-LLM-based structured extraction.
-
-Must:
-
-* use structured outputs
-* validate with Pydantic
-* retry on malformed outputs
-
-4. jd_analysis_node
-   Reads:
-
-* job_description_text
-
-Writes:
-
-* jd_analysis
-
-LLM structured extraction.
-
-5. ats_evaluation_node
-
-IMPORTANT:
-This must be HYBRID.
-
-Deterministic layer:
-
-* keyword overlap
-* exact skill matching
-* ATS heuristics
-
-Semantic LLM layer:
-
-* transferable skills
-* semantic project alignment
-* contextual fit
-
-Writes:
-
-* ats_report
-
-==================================================
-PARALLEL FAN-OUT
-================
-
-After ATS evaluation:
-launch 3 parallel subgraphs using LangGraph fan-out patterns.
-
-==================================================
-RESUME OPTIMIZATION PIPELINE
-============================
-
-This is the MOST IMPORTANT branch.
-
-Must demonstrate:
-
-* conditional routing
-* HITL
-* interrupts
-* checkpointing
-* resumability
-* retry loops
-
-Flow:
-
-optimization_router_node
-↓
-optimize_section_node
-↓
-approval_interrupt_node
-↓
-approval_processing_node
-↓
-route_after_approval
-
-Possible routes:
-
-* commit_changes_node
-* regenerate optimize_section_node
-* escalation_node
-
-After approved changes:
-↓
-recompute_ats_node
-↓
-next weak section
-↓
-resume_export_node
-
-==================================================
-IMPORTANT APPROVAL DESIGN
-=========================
-
-Optimization nodes MUST NOT directly mutate optimized_resume.
-
-Correct lifecycle:
-
-proposal generation
-→ proposed_changes
-→ human approval
-→ commit_changes_node
-→ optimized_resume updated
-
-==================================================
-INTERRUPT + CHECKPOINT DESIGN
-=============================
-
-The graph must:
-
-* pause during approval
-* save checkpoint
-* resume from checkpoint after human response
-
-Demonstrate:
-
-* interrupt()
-* persistence
-* resumability
-
-==================================================
-ROUTING RULES
-=============
-
-Routers must:
-
-* remain deterministic
-* NOT use LLMs
-* NOT mutate state
-* only inspect state and choose next node
-
-Routing conditions:
-
-* approval status
-* retry count
-* completion status
-
-==================================================
-RETRY STRATEGY
-==============
-
-Retry counts should be section-scoped.
+The graph maintains structured typed state.
 
 Example:
 
 ```python
-section_retry_counts = {
-    "projects": 2
-}
+class GraphState(BaseModel):
+    resume_text: str
+
+    original_resume: StructuredResume
+    optimized_resume: StructuredResume
+
+    jd_analysis: JDAnalysis
+    ats_report: ATSReport
+
+    current_section: str
+
+    proposed_changes: dict
+    approval_state: dict
+    human_feedback: dict
+
+    retry_counts: dict
+
+    final_resume_path: str
 ```
 
-After retry limit:
-route to escalation node.
+Strict typing is required.
 
-==================================================
-INTERVIEW PIPELINE
-==================
+---
 
-Independent fast branch.
+# 14. FRONTEND UX EXPECTATIONS
 
-Should use:
+Resume optimization must behave like:
 
-* original_resume
-* jd_analysis
-* optional Tavily company research
+* persistent review tasks
+* side-by-side comparison
+* durable review lifecycle
+* embedded approval controls
 
-Generate:
+NOT:
 
-* technical questions
-* behavioral questions
-* project discussion prompts
-* likely interview rounds
-* preparation roadmap
-* interview experiences/tips
+* popup alerts
+* disappearing review state
+* transient notifications
 
-This branch should NOT depend on optimized_resume.
-It must remain independently parallelizable.
+Interview and Outreach should behave like:
 
-==================================================
-OUTREACH PIPELINE
-=================
+* async content cards/decks
+* independently loading panels
 
-Independent fast branch.
+---
 
-Generate:
+# 15. EXPORT ARCHITECTURE
 
-* cold outreach emails
-* referral requests
-* recruiter followups
+Export Hub should support:
 
-Optional Tavily enrichment:
+* optimized resume
+* interview prep
+* outreach toolkit
 
-* company context
-* recent company news
+Downloads must be REAL backend endpoints.
 
-==================================================
-CHECKPOINTING STRATEGY
-======================
+NOT placeholder alerts.
 
-Checkpoint after:
+---
 
-* expensive LLM nodes
-* fan-out boundaries
-* before/after interrupts
-* approval commits
+# 16. IMPORTANT ENGINEERING EXPECTATIONS
 
-Checkpoint-after-every-node is acceptable for simplicity.
+When fixing issues:
 
-Do NOT store huge binary artifacts directly in graph state.
-Store file paths/references only.
+* trace end-to-end flow
+* understand frontend/backend contracts
+* inspect graph lifecycle carefully
+* inspect interrupt lifecycle carefully
+* inspect state ownership carefully
 
-==================================================
-REDUCERS
-========
+Do NOT patch symptoms blindly.
 
-Demonstrate reducers for merge-safe parallel updates.
+---
 
-Important:
-parallel branches may update same keys.
+# 17. CURRENT MIGRATION STATE
 
-Reducers should be implemented where appropriate.
+The project evolved through:
 
-Examples:
+* vanilla JS frontend
+* early LangGraph architecture
+* React migration
+* task-oriented API migration
 
-* append workflow logs
-* merge interview results
-* merge generated outreach templates
+There may still be:
 
-Avoid reducers for canonical replace fields like:
+* duplicate logic
+* stale routes
+* old interrupt architecture
+* old state handling
+* inconsistent naming
+* partially migrated files
 
-* ats_report
-* optimized_resume
+You must:
 
-==================================================
-FOLDER STRUCTURE
-================
+* identify stale architecture
+* identify dead code
+* identify conflicting lifecycle logic
+* identify broken state ownership
 
-Use clean modular architecture.
+before making changes.
 
-Suggested:
+---
 
-```text
-app/
-│
-├── api/
-├── graph/
-│   ├── state/
-│   ├── nodes/
-│   ├── routers/
-│   ├── subgraphs/
-│   ├── reducers/
-│   ├── checkpoints/
-│   └── builders/
-│
-├── models/
-├── services/
-├── prompts/
-├── exporters/
-├── utils/
-└── main.py
-```
+# CURRENT ISSUES TO FIX
+ i will tell them in chat.
 
-==================================================
-IMPLEMENTATION STYLE
-====================
+---
 
-Code must:
+# OUTPUT EXPECTATIONS
 
-* explain WHY each component exists
-* include comments for LangGraph concepts
-* remain modular
-* avoid giant files
-* be interview-quality
-* beginner-readable
-* production-inspired
+When proposing fixes:
 
-==================================================
-IMPORTANT ENGINEERING PRINCIPLES
-================================
+1. Explain ROOT CAUSE clearly
+2. Explain WHY current behavior occurs
+3. Explain architectural issue
+4. Give exact files to modify
+5. Give exact code replacements
+6. Preserve compatibility with existing architecture
+7. Avoid introducing hidden coupling
+8. Avoid temporary hacks
+9. Re-check lifecycle correctness before finalizing
 
-Prioritize:
+Always think like:
 
-* understandable orchestration
-* workflow correctness
-* state consistency
-* clean graph flow
-* safe resumability
-* deterministic routing
-* modular node contracts
+* a senior systems engineer
+* a workflow architect
+* a production backend engineer
 
-Avoid:
-
-* prompt spaghetti
-* giant god-state objects
-* uncontrolled shared mutation
-* unnecessary agents
-* unnecessary RAG
-* random abstractions
-
-==================================================
-VERY IMPORTANT
-==============
-
-Do NOT dump one giant monolithic file.
-
-Build incrementally.
-
-Start with:
-
-1. Pydantic schemas
-2. GraphState
-3. Basic nodes
-4. Routing functions
-5. Foundation graph
-6. Resume HITL subgraph
-7. Parallel branches
-8. Persistence/checkpointing
-9. Export layer
-
-Include:
-
-* detailed explanations
-* architectural reasoning
-* tradeoff explanations
-* debugging tips
-* common beginner mistakes
-* LangGraph best practices
-
-This project is intended to deeply teach:
-
-* LangGraph orchestration
-* workflow systems
-* checkpointing
-* interrupts
-* reducers
-* state design
-* production AI backend architecture
-* DAG thinking
-* async orchestration
-* HITL systems
-* modular AI engineering
+NOT like a code autocomplete tool.

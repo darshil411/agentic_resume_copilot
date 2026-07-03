@@ -46,5 +46,5 @@ export function useResumeTask(threadId, pollInterval = 5000) {
 
     const invalidate = () => fetchTask();
 
-    return { task, error, isLoading, approve, regenerate, invalidate };
+    return { task, error, isLoading, approve, regenerate, skip, invalidate };
 }
