@@ -19,12 +19,12 @@ class GlobalGraphState(BaseModel):
     ats_report: Optional[ATSReport] = None
     optimized_resume: Optional[StructuredResume] = None
     
-    # Resume Subgraph
+    # Resume Subgraph - FIXED: Added merge_dicts reducers for safe partial updates
     current_section: Optional[str] = None
     proposed_changes: Optional[Dict[str, Any]] = None
-    approval_state: Optional[Dict[str, Any]] = None
-    human_feedback: Optional[Dict[str, str]] = None
-    section_retry_counts: Optional[Dict[str, int]] = None
+    approval_state: Annotated[Dict[str, Any], merge_dicts] = Field(default_factory=dict)
+    human_feedback: Annotated[Dict[str, str], merge_dicts] = Field(default_factory=dict)
+    section_retry_counts: Annotated[Dict[str, int], merge_dicts] = Field(default_factory=dict)
     resume_export_paths: Optional[Dict[str, str]] = None
     
     # Interview Subgraph

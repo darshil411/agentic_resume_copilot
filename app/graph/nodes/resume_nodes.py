@@ -10,94 +10,91 @@ class ProposedChanges(BaseModel):
     new_content: str = Field(description="The proposed optimized text for the section")
     reasoning: str = Field(description="Why this change improves the ATS score or impact")
 
+def _is_section_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return len(value) == 0
+    text = str(value).strip()
+    return text == "" or text.lower() in ("none", "null")
+
 def optimize_section_node(state: GlobalGraphState) -> Dict[str, Any]:
-    """
-    LLM Node: Proposes changes for a specific section based on ATS feedback.
-    """
     section = state.current_section or "summary"
     original = state.original_resume
     ats_report = state.ats_report
     
+    # Safely extract feedback
+    feedback_dict = state.human_feedback or {}
+    feedback_text = feedback_dict.get(section, "")
+
     raw_section = getattr(original, section, '') if original else ''
 
-    # Normalize section data safely into prompt-friendly text
-    if isinstance(raw_section, list):
-        current_text = "\n".join([str(x) for x in raw_section])
-    else:
-        current_text = str(raw_section).strip()
-    # Skip sections that do not exist in original resume
-    if not current_text or str(current_text).strip().lower() in ("none", "null", ""):
+    # Auto-skip empty sections deterministically
+    if _is_section_empty(raw_section):
         return {
-            "workflow_logs": [
-                f"Skipped optimization for missing section: {section}"
-            ],
-            "approval_state": {
-                section: "skipped"
-            }
+            "workflow_logs": [f"Skipped optimization for missing section: {section}"],
+            "approval_state": {section: "skipped"}
         }
+
+    current_text = "\n".join([str(x) for x in raw_section]) if isinstance(raw_section, list) else str(raw_section).strip()
+
+    feedback_block = (
+        f"\n\nIMPORTANT: The human reviewer rejected the previous draft with this feedback:\n"
+        f"\"{feedback_text}\"\n"
+        f"You MUST incorporate this feedback directly in the new version."
+        if feedback_text else ""
+    )
+
     prompt = f"""
     The current resume section '{section}' needs optimization for the target job.
     ATS Missing Skills: {ats_report.missing_skills if ats_report else []}
     Original Resume Section Data: {current_text}
+    {feedback_block}
 
     Propose an optimized version of this section that naturally incorporates missing skills
     and improves impact. Format the output as clean, professional plain text or markdown.
     """
 
-    # Primary: Cerebras (llama3.1-8b) — fast inference, ideal for HITL loops
     try:
         llm = get_llm("cerebras").with_structured_output(ProposedChanges)
         proposed = llm.invoke([HumanMessage(content=prompt)])
         return {
             "proposed_changes": proposed.model_dump(),
+            "approval_state": {section: ""}, # CRITICAL: Resets gate to trigger interrupt again
             "workflow_logs": [f"[Cerebras/llama3.1-8b] Generated proposal for '{section}'"]
         }
     except Exception as cerebras_error:
-        print(f"[Cerebras Error] {str(cerebras_error)}") # fall through to Gemini
+        print(f"[Cerebras Error] {str(cerebras_error)}")
 
-    # Fallback: Gemini with key rotation
     try:
         llm = get_llm("gemini").with_structured_output(ProposedChanges)
         proposed = llm.invoke([HumanMessage(content=prompt)])
         return {
             "proposed_changes": proposed.model_dump(),
+            "approval_state": {section: ""}, # CRITICAL: Resets gate to trigger interrupt again
             "workflow_logs": [f"[Gemini fallback] Generated proposal for '{section}'"]
         }
     except Exception as e:
         return {
-            "errors": [f"optimize_section_node failed (both providers): {str(e)}"],
+            "errors": [f"optimize_section_node failed: {str(e)}"],
+            "approval_state": {section: ""},
             "proposed_changes": {
                 "new_content": f"[AI Error] Failed to optimize '{section}'. Click Regenerate to retry.",
-                "reasoning": "Both Cerebras and Gemini failed. Check API keys and rate limits."
+                "reasoning": "Providers failed. Check API keys and rate limits."
             }
         }
 
-
 def approval_processing_node(state: GlobalGraphState) -> Dict[str, Any]:
-    """
-    Durable HITL interrupt node.
-    """
-
     section = state.current_section or "summary"
-
     approval_state = state.approval_state or {}
     section_status = approval_state.get(section, "")
 
-    # ---------------------------------------------------
-    # SKIPPED SECTION
-    # ---------------------------------------------------
     if section_status == "skipped":
-        return {
-            "workflow_logs": [
-                f"Skipped section: {section}"
-            ]
-        }
+        return {"workflow_logs": [f"Skipped section: {section}"]}
 
     proposed = state.proposed_changes or {}
 
-    # ---------------------------------------------------
-    # FIRST REVIEW → INTERRUPT
-    # ---------------------------------------------------
+    # First Review or Regenerated Draft -> HITL INTERRUPT
     if section_status == "":
         interrupt({
             "type": "resume_review",
@@ -105,35 +102,19 @@ def approval_processing_node(state: GlobalGraphState) -> Dict[str, Any]:
             "proposal": proposed,
         })
 
-    # ---------------------------------------------------
-    # APPROVED
-    # ---------------------------------------------------
     if section_status == "approved":
-        return {
-            "workflow_logs": [
-                f"Approved section: {section}"
-            ]
-        }
+        return {"workflow_logs": [f"Approved section: {section}"]}
 
-    # ---------------------------------------------------
-    # REGENERATE / REJECT
-    # ---------------------------------------------------
-    counts = copy.deepcopy(state.section_retry_counts or {})
-    counts[section] = counts.get(section, 0) + 1
+    # Regenerate / Reject Math (made simpler by the reducer)
+    counts_dict = state.section_retry_counts or {}
+    current_count = counts_dict.get(section, 0)
 
     return {
-        "section_retry_counts": counts,
-        "workflow_logs": [
-            f"Regenerating section: {section}"
-        ]
+        "section_retry_counts": {section: current_count + 1},
+        "workflow_logs": [f"Regenerating section: {section}"]
     }
+
 def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
-    """
-    Deterministic Node: Mutates the `optimized_resume` AFTER human approval.
-    Only sets sections that are plain-string compatible (summary).
-    For list fields (experience, projects, skills), stores the optimized text
-    in the same field as a string override — the export/download endpoint renders it.
-    """
     proposed = state.proposed_changes or {}
     section = state.current_section or "summary"
     
@@ -144,31 +125,11 @@ def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
     
     new_content = proposed.get("new_content")
 
-    # Only overwrite if valid optimized content exists
-    if (
-        new_content
-        and isinstance(new_content, str)
-        and not new_content.startswith("⚠️")
-    ):
-        current_val = getattr(optimized, section, None)
-        if isinstance(current_val, str) or current_val is None:
-            # Safe to set directly — it's a string field (e.g. summary)
-            setattr(optimized, section, new_content)
-        else:
-            # Complex field (list of Pydantic models like experience/projects/skills)
-            # We store the optimized text as the summary-style override by keeping
-            # the original structure but recording the approved text in workflow_logs.
-            # The display layer and export will use proposed_changes for rendering.
-            pass  # optimized retains original structured data for these fields
+    # Overwrite the section with AI improvements if valid. (Exports pull directly from this)
+    if (new_content and isinstance(new_content, str) and not new_content.startswith("⚠️")):
+        setattr(optimized, section, new_content)
         
-    all_sections = [
-        s for s in ["summary", "experience", "projects", "skills"]
-    ]
-    # Skip sections absent in original resume
-    all_sections = [
-        s for s in all_sections
-        if getattr(state.original_resume, s, None)
-    ]
+    all_sections = ["summary", "experience", "projects", "skills"]
     try:
         current_idx = all_sections.index(section)
         next_section = all_sections[current_idx + 1]
@@ -180,18 +141,4 @@ def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
         "current_section": next_section,
         "proposed_changes": {}, 
         "workflow_logs": [f"Committed approved changes to {section}"]
-    }
-
-def recompute_ats_node(state: GlobalGraphState) -> Dict[str, Any]:
-    ats = copy.deepcopy(state.ats_report)
-    if ats:
-        ats.score = min(100.0, ats.score + 10.0)
-    return {"ats_report": ats, "workflow_logs": ["Recomputed ATS score after committing changes."]}
-
-def resume_export_node(state: GlobalGraphState) -> Dict[str, Any]:
-    return {
-        "resume_export_paths": {"pdf": "/exports/optimized_resume.pdf"},
-        "branch_status": {
-            "resume_branch": "COMPLETED"},
-        "workflow_logs": ["Exported optimized resume."]
     }
