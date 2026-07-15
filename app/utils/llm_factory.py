@@ -167,7 +167,7 @@ def get_llm(provider: str = "gemini", model: str = None, temperature: float = 0.
     # ── Groq ──────────────────────────────────────────────────────────────
     elif provider == "groq":
         api_key = _get_env("GROQ_API_KEY")
-        model_name = model or "llama-3.1-8b-instant"
+        model_name = model or "openai/gpt-oss-120b"
         return ChatGroq(
             model_name=model_name,
             temperature=temperature,

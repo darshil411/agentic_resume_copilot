@@ -31,11 +31,156 @@ def _is_section_empty(value: Any) -> bool:
         return True
     return False
 
-def _is_valid_proposal(proposed: ProposedChanges) -> bool:
-    """Ensures the LLM didn't just return an empty string or spaces."""
-    if not proposed or not proposed.new_content:
-        return False
-    return len(proposed.new_content.strip()) > 5
+SECTION_PROMPTS = {
+    "summary": """
+    OBJECTIVE:
+    Rewrite the professional summary into a concise, technically strong, recruiter-friendly introduction.
+
+    RULES:
+    - Keep it between 3–5 lines.
+    - Focus on technical strengths, specialization, and engineering capability.
+    - Mention strongest technologies naturally.
+    - Align with the target role and ATS keywords.
+    - Sound confident and professional, NOT exaggerated.
+    - DO NOT use buzzword-heavy fluff like:
+      "hardworking", "team player", "passionate learner".
+    - DO NOT invent fake years of experience.
+    - DO NOT use first-person language ("I", "my").
+
+    GOOD SUMMARY STYLE:
+    "AI-focused software engineer skilled in LangGraph, FastAPI, and LLM orchestration, with experience building structured agentic workflows, ATS optimization systems, and scalable backend pipelines."
+
+    OUTPUT:
+    Clean professional paragraph only.
+    """,
+
+    "skills": """
+    OBJECTIVE:
+    Reorganize and optimize the skills section for ATS readability and recruiter scanning.
+
+    RULES:
+    - Group skills into logical categories.
+    - Example categories:
+      Languages, Frameworks, AI/ML, Databases, Tools, Cloud.
+    - Prioritize skills relevant to the job description.
+    - Remove redundant or weak technologies.
+    - DO NOT invent technologies.
+    - DO NOT add skills unsupported by projects or experience.
+    - Keep formatting extremely clean and scannable.
+
+    OUTPUT FORMAT:
+    Category: Skill1, Skill2, Skill3
+    """,
+
+    "projects": """
+    OBJECTIVE:
+    Rewrite project descriptions to emphasize engineering complexity, architecture, ownership, and technical impact.
+
+    RULES:
+    - Use strong engineering action verbs.
+    - Focus on:
+      architecture,
+      backend systems,
+      scalability,
+      orchestration,
+      APIs,
+      performance,
+      automation,
+      AI workflows.
+    - Explain WHAT was built,
+      HOW it was built,
+      WHY it mattered.
+    - Quantify impact ONLY if clearly supported by the original content.
+    - If metrics are unavailable, improve technical depth WITHOUT inventing fake numbers.
+    - Mention technologies naturally within bullets.
+    - Avoid generic resume filler language.
+
+    BULLET STYLE:
+    - Architected...
+    - Developed...
+    - Engineered...
+    - Implemented...
+    - Optimized...
+
+    STRICT RULES:
+    - NO hallucinated companies/users/revenue.
+    - NO fake scaling claims.
+    - NO fake production metrics.
+
+    OUTPUT:
+    Clean markdown bullet points only.
+    """,
+
+    "experience": """
+    OBJECTIVE:
+    Rewrite work experience to emphasize ownership, technical contribution, system design, and measurable engineering value.
+
+    RULES:
+    - Use concise, high-impact bullet points.
+    - Focus on:
+      backend systems,
+      APIs,
+      optimization,
+      automation,
+      scalability,
+      AI integration,
+      architecture decisions.
+    - Use the XYZ style naturally:
+      Accomplished X by implementing Y resulting in Z.
+    - Add metrics ONLY if strongly implied or already present.
+    - Avoid fake business metrics.
+    - Avoid generic phrases like:
+      "Worked on",
+      "Responsible for",
+      "Helped with".
+
+    PRIORITY:
+    Ownership > Participation.
+
+    GOOD BULLET STYLE:
+    "Engineered a FastAPI-based orchestration backend integrating LangGraph workflows and structured state management for AI resume optimization."
+
+    OUTPUT:
+    Resume-ready markdown bullet points only.
+    """,
+
+    "education": """
+    OBJECTIVE:
+    Keep education concise, factual, and ATS-friendly.
+
+    RULES:
+    - Preserve factual accuracy.
+    - Include:
+      degree,
+      university,
+      graduation year,
+      CGPA if available.
+    - Optionally add:
+      relevant coursework
+      ONLY if relevant to the target role.
+    - DO NOT generate fake achievements.
+    - DO NOT generate fake research/work.
+    - Keep formatting clean.
+
+    OUTPUT:
+    Clean factual education section only.
+    """,
+
+    "certifications": """
+    OBJECTIVE:
+    Format certifications clearly for recruiter readability and ATS parsing.
+
+    RULES:
+    - Preserve exact certification names.
+    - Mention issuer/platform if available.
+    - Keep formatting simple and professional.
+    - Prioritize certifications relevant to the JD.
+    - DO NOT hallucinate certification providers or dates.
+
+    OUTPUT:
+    Clean certification list only.
+    """
+}
 
 def optimize_section_node(state: GlobalGraphState) -> Dict[str, Any]:
     section = state.current_section or "summary"
@@ -47,7 +192,7 @@ def optimize_section_node(state: GlobalGraphState) -> Dict[str, Any]:
     
     raw_section = _get_section_data(original, section)
 
-    # SMART SKIP: Gracefully and deeply skip null/empty sections without ANY API calls
+    # SMART SKIP: Bypass the LLM call entirely if the section has no real data
     if _is_section_empty(raw_section):
         return {
             "workflow_logs": [f"Skipped optimization for missing/empty section: {section}"],
@@ -64,40 +209,89 @@ def optimize_section_node(state: GlobalGraphState) -> Dict[str, Any]:
         if feedback_text else ""
     )
 
+    section_rules = SECTION_PROMPTS.get(
+        section.lower(),
+        """
+        Optimize this resume section for ATS compatibility,
+        recruiter readability,
+        and technical clarity while preserving factual accuracy.
+        """
+    )
+
     prompt = f"""
-    The current resume section '{section}' needs optimization for the target job.
-    ATS Missing Skills: {ats_report.missing_skills if ats_report else []}
-    Original Resume Section Data: {current_text}
+    You are a senior technical resume strategist specializing in software engineering, AI systems, backend engineering, and agentic AI workflows.
+
+    Your job is to improve ONE specific resume section while preserving factual accuracy.
+
+    TARGET SECTION:
+    {section.upper()}
+
+    JOB DESCRIPTION ATS REQUIREMENTS:
+    {ats_report.missing_skills if ats_report else []}
+
+    ORIGINAL SECTION CONTENT:
+    -------------------------
+    {current_text}
+    -------------------------
+
     {feedback_block}
 
-    Propose an optimized version of this section that naturally incorporates missing skills
-    and improves impact. Format the output as clean, professional plain text or markdown.
-    Never return an empty string.
+    SECTION-SPECIFIC OPTIMIZATION INSTRUCTIONS:
+    {section_rules}
+
+    GLOBAL RULES:
+    - Preserve factual accuracy.
+    - Improve recruiter readability.
+    - Improve ATS alignment naturally.
+    - Avoid keyword stuffing.
+    - Avoid fake metrics.
+    - Avoid exaggerated claims.
+    - Preserve original technical meaning.
+    - Keep formatting clean and resume-ready.
+    - Output ONLY final resume content.
+    - DO NOT include explanations or chat responses.
     """
 
-    for provider_name in ("cerebras", "gemini"):
-        try:
-            llm = get_llm(provider_name).with_structured_output(ProposedChanges)
-            proposed = llm.invoke([HumanMessage(content=prompt)])
+    try:
+        llm = get_llm("cerebras").with_structured_output(ProposedChanges)
+        # 1. Added config tags to trace Cerebras usage and token burn
+        proposed = llm.invoke(
+            [HumanMessage(content=prompt)],
+            config={"tags": ["provider:cerebras", f"section:{section}"]}
+        )
+        
+        # STRICT NULL-GUARD: Reject empty LLM responses
+        if not proposed or not proposed.new_content or proposed.new_content.strip() == "":
+            raise ValueError("LLM returned empty proposal")
             
-            if not _is_valid_proposal(proposed):
-                raise ValueError(f"{provider_name} returned empty new_content")
+        return {
+            "proposed_changes": proposed.model_dump(),
+            "workflow_logs": [f"Generated proposal for '{section}'"]
+        }
+    except Exception as cerebras_error:
+        try:
+            llm = get_llm("gemini").with_structured_output(ProposedChanges)
+            # 2. Added config tags to track Fallback activations specifically
+            proposed = llm.invoke(
+                [HumanMessage(content=prompt)],
+                config={"tags": ["provider:gemini", "fallback_triggered", f"section:{section}"]}
+            )
+            
+            if not proposed or not proposed.new_content or proposed.new_content.strip() == "":
+                raise ValueError("LLM returned empty proposal")
                 
             return {
                 "proposed_changes": proposed.model_dump(),
-                "workflow_logs": [f"[{provider_name}] Generated proposal for '{section}'"]
+                "workflow_logs": [f"Generated proposal for '{section}'"]
             }
         except Exception as e:
-            print(f"[optimize_section_node] {provider_name} failed for '{section}': {e}")
-
-    # Both providers failed or returned empty — deterministic, visible fallback
-    return {
-        "errors": [f"optimize_section_node: both providers failed/empty for '{section}'"],
-        "proposed_changes": {
-            "new_content": f"⚠️ AI could not generate a proposal for '{section}'. Click Try Again, or check server logs.",
-            "reasoning": "Both Cerebras and Gemini either errored or returned empty content."
-        }
-    }
+            return {
+                "errors": [f"optimize_section_node failed: {str(e)}"],
+                "proposed_changes": {
+                    "new_content": f"⚠️ [AI Error] Failed to optimize '{section}'. Please click 'Try Again'.",
+                    "reasoning": "Providers failed or returned empty content. Check API keys and rate limits."
+                }
+            }
 
 def approval_processing_node(state: GlobalGraphState) -> Dict[str, Any]:
     section = state.current_section or "summary"

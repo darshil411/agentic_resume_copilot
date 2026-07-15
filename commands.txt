@@ -1,0 +1,8 @@
+//backend 
+conda activate genai311
+python app/main.py  
+
+//frontend
+cd frontend-react
+npm run start 
+

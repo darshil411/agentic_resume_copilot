@@ -1,9 +1,9 @@
 import os
 import sys
-from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+from dotenv import load_dotenv # pyright: ignore[reportMissingImports]
+from fastapi import FastAPI # pyright: ignore[reportMissingImports]
+from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissingImports]
+import uvicorn # pyright: ignore[reportMissingImports]
 
 # Ensure root directory is in python path and load .env before any other imports
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

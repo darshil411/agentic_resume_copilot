@@ -3,14 +3,15 @@ import shutil
 import uuid
 import json
 import threading
+import re
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
-from langgraph.types import Command
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Request # pyright: ignore[reportMissingImports]
+from fastapi.responses import PlainTextResponse # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel # pyright: ignore[reportMissingImports]
+from langgraph.types import Command # pyright: ignore[reportMissingImports]
 
 from app.graph.builders.main_graph import build_main_graph
 from app.utils.sqlite_checkpoint import get_checkpointer
@@ -201,7 +202,8 @@ async def get_workflow_metadata(thread_id: str):
         overall_status=overall_status,
         active_branches=branches,
         current_review_section=values.get("current_section"),
-        completed_sections=[]
+        completed_sections=[],
+        workflow_logs=values.get("workflow_logs", [])  # <--- NEW DATA SYNCED TO REACT HERE
     )
 
 @router.get("/resume/task/current/{thread_id}", response_model=ReviewTaskDTO)
@@ -284,26 +286,40 @@ async def skip_resume_task(thread_id: str, request: TaskApprovalRequest, backgro
     background_tasks.add_task(_advance_graph, thread_id, Command(resume={"action": "skip", "feedback": ""}))
     return {"status": "success"}
 
+
 @router.get("/interview/{thread_id}", response_model=InterviewDeckDTO)
 async def get_interview_data(thread_id: str):
     slot = get_interview_result(thread_id)
     status = slot.get("status", WorkflowStatus.PROCESSING.value)
     data = slot.get("data") or {}
     
-    raw_qs = data.get("interview_questions") or []
+    research = data.get("company_research") or {}
+    raw_qs = research.get("tailored_questions") or []
+    
     questions = []
-
-    for idx, item in enumerate(raw_qs):
-        if isinstance(item, str):
-            questions.append(InterviewQuestionDTO(category=f"Q{idx+1}", question=item, answer=""))
-        elif isinstance(item, dict):
+    for item in raw_qs:
+        if isinstance(item, dict):
             questions.append(InterviewQuestionDTO(
-                category=item.get("category", f"Q{idx+1}"),
-                question=item.get("question", str(item)),
-                answer=item.get("answer") or item.get("suggested_answer") or ""
+                category=item.get("category", "General Evaluation"),
+                question=item.get("question", ""),
+                interviewer_intent=item.get("interviewer_intent", "Evaluate domain competence metrics."),
+                project_to_highlight=item.get("project_to_highlight", "Not specified"),
+                answer=_format_content_for_ui(item.get("strategy", ""))
             ))
 
-    return InterviewDeckDTO(thread_id=thread_id, status=status, questions=questions)
+    return InterviewDeckDTO(
+        thread_id=thread_id,
+        status=status,
+        confidence_score=research.get("confidence_score", "MEDIUM"),
+        source_basis=research.get("source_basis", ["Corporate standard trends"]),
+        company_intel=research.get("company_intel", []),
+        experiences=research.get("interview_experiences", []),
+        company_questions=research.get("company_questions", []),
+        roadmap=research.get("prep_roadmap", []),
+        questions=questions
+    )
+
+
 
 @router.get("/outreach/{thread_id}", response_model=OutreachWorkspaceDTO)
 async def get_outreach_data(thread_id: str):
@@ -336,43 +352,134 @@ async def get_outreach_data(thread_id: str):
         followups=followups
     )
 
+
+import re
+
 @router.get("/exports/{thread_id}/resume")
 async def download_resume(thread_id: str):
     values, _, _ = _extract_state(thread_id)
-    optimized = values.get("optimized_resume")
-    if not optimized:
+    optimized_raw = values.get("optimized_resume")
+    
+    if not optimized_raw:
         raise HTTPException(status_code=404, detail="Optimized resume not ready yet.")
         
-    content = []
-    if isinstance(optimized, dict):
-        name = optimized.get("name", "")
-        if name:
-            content.append(name)
-        contact_parts = [v for k, v in optimized.items() if k in ("email", "phone", "city", "linkedin") and v]
-        if contact_parts:
-            content.append(" | ".join(contact_parts))
-        content.append("")
+    # FIX 1: Safely convert Pydantic object to a dictionary so the layout engine works
+    optimized = _safe_to_dict(optimized_raw)
+
+    try:
+        from reportlab.lib.pagesizes import letter # pyright: ignore[reportMissingModuleSource]
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer # pyright: ignore[reportMissingModuleSource]
+        from reportlab.platypus.flowables import HRFlowable # pyright: ignore[reportMissingModuleSource]
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle # pyright: ignore[reportMissingModuleSource]
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT # pyright: ignore[reportMissingModuleSource]
+        from reportlab.lib import colors # pyright: ignore[reportMissingModuleSource]
+        from io import BytesIO
+        from fastapi import Response # pyright: ignore[reportMissingImports]
+    except ImportError:
+        raise HTTPException(status_code=500, detail="ReportLab is not installed.")
+
+    buffer = BytesIO()
+    # Standard Resume Margins (0.5 inch = 36 points)
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+    styles = getSampleStyleSheet()
+    
+    # Professional ATS Styles
+    name_style = ParagraphStyle('NameStyle', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=18, alignment=TA_CENTER, spaceAfter=6)
+    contact_style = ParagraphStyle('ContactStyle', parent=styles['Normal'], fontName='Helvetica', fontSize=10, alignment=TA_CENTER, spaceAfter=12, textColor=colors.HexColor("#444444"))
+    section_style = ParagraphStyle('SectionStyle', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=12, spaceBefore=12, spaceAfter=2, textColor=colors.HexColor("#222222"), textTransform='uppercase')
+    body_style = ParagraphStyle('BodyStyle', parent=styles['Normal'], fontName='Helvetica', fontSize=10, spaceAfter=4, leading=14)
+    bullet_style = ParagraphStyle('BulletStyle', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leftIndent=15, firstLineIndent=-10, spaceAfter=4, leading=14)
+    
+    story = []
+    
+    def clean_text(text: str) -> str:
+        """FIX 2: Cleans unicode hyphens to stop 'AIndriven' bug, and parses Markdown bolding"""
+        text = str(text)
+        # Destroy smart quotes and em-dashes that break PDF encodings
+        text = text.replace('–', '-').replace('—', '-').replace('\u2013', '-').replace('\u2014', '-')
+        text = text.replace('’', "'").replace('‘', "'").replace('“', '"').replace('”', '"')
+        # Parse **markdown** to HTML <b>bold</b>
+        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+        return text
+    
+    # 1. Header (Name & Contact)
+    name = optimized.get("name", "")
+    if name:
+        story.append(Paragraph(clean_text(name).upper(), name_style))
         
-        for section in ("summary", "skills", "experience", "projects", "education", "certifications"):
-            text = optimized.get(section)
-            if not text:
-                continue
-            content.append(f"--- {section.upper()} ---")
-            if isinstance(text, list):
-                for item in text:
-                    content.append(str(item))
-            elif isinstance(text, dict):
-                for k, v in text.items():
-                    content.append(f"{k}: {', '.join(v) if isinstance(v, list) else v}")
-            else:
-                content.append(str(text))
-            content.append("")
-    else:
-        content.append(str(optimized))
+    contact_parts = [v for k, v in optimized.items() if k in ("email", "phone", "city", "linkedin", "github") and v]
+    if contact_parts:
+        story.append(Paragraph(clean_text(" | ".join(contact_parts)), contact_style))
+    
+    # 2. Iterate Strictly Through Standard Resume Sections
+    for section in ("summary", "education", "skills", "experience", "projects", "certifications"):
+        text = optimized.get(section)
         
-    return PlainTextResponse(
-        "\n".join(content),
-        headers={"Content-Disposition": "attachment; filename=optimized_resume.txt"}
+        # Skip empty sections natively
+        if not text or text == "null" or text == "None" or text == []:
+            continue
+            
+        # Section Header + Horizontal Divider
+        story.append(Paragraph(section.upper(), section_style))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=8, spaceBefore=0))
+        
+        # Content Rendering based on structure
+        if isinstance(text, list):
+            for item in text:
+                if isinstance(item, dict):
+                    # For structured objects like [{company: x, role: y}]
+                    title_line = []
+                    bullets = []
+                    for k, v in item.items():
+                        if k in ['company', 'college', 'title', 'name', 'role', 'degree'] and v:
+                            title_line.append(f"<b>{clean_text(v)}</b>")
+                        elif isinstance(v, list):
+                            bullets.extend(v)
+                        elif v:
+                            title_line.append(clean_text(v))
+                    
+                    if title_line:
+                        story.append(Paragraph(" | ".join(title_line), body_style))
+                    if bullets:
+                        for b in bullets:
+                            story.append(Paragraph(f"• {clean_text(b)}", bullet_style))
+                    story.append(Spacer(1, 6))
+                else:
+                    # For flat lists
+                    sub_items = str(item).split('\n')
+                    for sub in sub_items:
+                        clean_sub = clean_text(sub.strip())
+                        if not clean_sub: continue
+                        if clean_sub.startswith('-') or clean_sub.startswith('•'):
+                            story.append(Paragraph(f"• {clean_sub[1:].strip()}", bullet_style))
+                        else:
+                            story.append(Paragraph(f"• {clean_sub}", bullet_style))
+        elif isinstance(text, dict):
+            # For skills dict: {Languages: [Python, SQL]}
+            for k, v in text.items():
+                val_str = ', '.join(v) if isinstance(v, list) else v
+                story.append(Paragraph(f"<b>{clean_text(k).title()}:</b> {clean_text(val_str)}", body_style))
+        else:
+            # For direct strings (like Summary)
+            lines = str(text).split('\n')
+            for line in lines:
+                clean_line = clean_text(line.strip())
+                if not clean_line: continue
+                if clean_line.startswith('-') or clean_line.startswith('•'):
+                    story.append(Paragraph(f"• {clean_line[1:].strip()}", bullet_style))
+                else:
+                    story.append(Paragraph(clean_line, body_style))
+            
+        story.append(Spacer(1, 6))
+        
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    
+    return Response(
+        content=pdf_bytes, 
+        media_type="application/pdf", 
+        headers={"Content-Disposition": "attachment; filename=Optimized_ATS_Resume.pdf"}
     )
 
 @router.get("/exports/{thread_id}/interview")

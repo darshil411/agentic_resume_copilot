@@ -1,15 +1,12 @@
-from typing import List
-from pydantic import BaseModel, Field # pyright: ignore[reportMissingImports]
+from typing import List, Optional
+from pydantic import BaseModel, Field
 
 class JDAnalysis(BaseModel):
-    """
-    Structured analysis of a job description.
-    """
-    required_skills: List[str] = Field(default_factory=list, description="Explicitly required skills mentioned in the JD")
-    responsibilities: List[str] = Field(default_factory=list, description="Key responsibilities expected in the role")
-    keywords: List[str] = Field(default_factory=list, description="Important keywords or domain terms")
-    tools: List[str] = Field(default_factory=list, description="Specific tools, software, or frameworks mentioned")
-    experience_requirements: List[str] = Field(default_factory=list, description="Required years of experience or seniority level")
-    keywords: List[str] = Field(default_factory=list, description="Important keywords or domain terms")
-
-    role_summary: str
+    company_name: Optional[str] = Field(default="Generic Company", description="The name of the company offering the job, extracted from the text")
+    industry: Optional[str] = Field(default="Technology", description="The industry domain, e.g., AI, FinTech, E-commerce")
+    role_summary: str = Field(description="High-level summary of the role")
+    required_skills: List[str] = Field(description="List of core required skills and technologies")
+    responsibilities: List[str] = Field(description="Key responsibilities and duties")
+    keywords: List[str] = Field(description="ATS keywords extracted from the JD")
+    tools: List[str] = Field(description="Specific tools, software, or platforms mentioned")
+    experience_requirements: str = Field(description="Years or depth of experience required")

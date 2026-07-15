@@ -4,7 +4,7 @@ import { useResumeTask } from '../../hooks/useResumeTask';
 import { WorkflowStatus } from '../../models/enums';
 import { ResumePaneSkeleton } from '../common/SkeletonLoaders';
 import { Check, RotateCcw, User, Briefcase, Code, BookOpen, Award } from 'lucide-react';
-
+import { useWorkflowStatus } from '../../hooks/useWorkflowStatus';
 // ---------------------------------------------------------------------------
 // OriginalResumePanel — fetches and displays structured resume in a flex card
 // ---------------------------------------------------------------------------
@@ -192,7 +192,11 @@ export default function ResumeWorkspace() {
     const { task, isLoading, error, approve, regenerate, skip } = useResumeTask(threadId, 3000);
     const [feedback, setFeedback] = useState('');
     const [actionLoading, setActionLoading] = useState(false);
-
+        // PASTE THIS LINE RIGHT HERE:
+    const { data, workflow: workflowAlias } = useWorkflowStatus(threadId);
+    
+    // (This safely handles it whether your hook returns 'data' or 'workflow')
+    const workflow = data || workflowAlias;
     if (isLoading && !task) {
         return (
             <div className="flex gap-6">
@@ -211,6 +215,38 @@ export default function ResumeWorkspace() {
         <div className="flex gap-6 items-start min-h-0">
             <div className="w-80 flex-shrink-0 sticky top-0">
                 <OriginalResumePanel threadId={threadId} />
+                {/* Add this inside your ResumeWorkspace sidebar/panel area */}
+                <div className="bg-white rounded-xl border border-slate-200 p-4 mt-4 shadow-sm">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                        Workflow Timeline
+                    </h3>
+                    <div className="space-y-2">
+                        {workflow?.workflow_logs?.length > 0 ? (
+                            workflow.workflow_logs.map((log, index) => (
+                                <div key={index} className="flex items-start gap-2 text-sm text-slate-600">
+                                    <span className="text-emerald-500 font-bold">✓</span>
+                                    <span className="leading-snug">{log}</span>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="text-sm text-slate-400 italic">Initializing engines...</div>
+                        )}
+                        
+                        {/* Blinking indicator for the active task */}
+                        {workflow?.overall_status === "PROCESSING" && (
+                            <div className="flex items-start gap-2 text-sm text-blue-500 font-medium animate-pulse mt-2">
+                                <span>⟳</span>
+                                <span>Optimizing sections...</span>
+                            </div>
+                        )}
+                        {workflow?.overall_status === "ACTION_REQUIRED" && (
+                            <div className="flex items-start gap-2 text-sm text-amber-500 font-medium mt-2">
+                                <span>⚠</span>
+                                <span>Awaiting Human Review</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
             <div className="flex-1 min-w-0">{children}</div>
         </div>
