@@ -1,6 +1,6 @@
 from pydantic import BaseModel # pyright: ignore[reportMissingImports]
 from datetime import datetime
-from typing import Optional, List
+from typing import Any, Optional, List
 from .enums import WorkflowStatus
 
 class BranchStatuses(BaseModel):
@@ -15,4 +15,6 @@ class WorkflowMetadataDTO(BaseModel):
     active_branches: BranchStatuses
     current_review_section: Optional[str]
     completed_sections: List[str]
-    workflow_logs: List[str] = []  # <--- NEW FIELD HOOKED UP HERE
+    ats_report: Optional[Any] = None            # <-- ADD THIS LINE
+    optimized_ats_report: Optional[Any] = None
+    workflow_logs: List[str] = []

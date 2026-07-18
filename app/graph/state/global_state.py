@@ -17,9 +17,10 @@ class GlobalGraphState(BaseModel):
     original_resume: Optional[StructuredResume] = None
     jd_analysis: Optional[JDAnalysis] = None
     ats_report: Optional[ATSReport] = None
+    optimized_ats_report: Optional[ATSReport] = None
     optimized_resume: Optional[StructuredResume] = None
     
-    # Resume Subgraph - FIXED: Added merge_dicts reducers for safe partial updates
+    # Resume Subgraph -  Added merge_dicts reducers for safe partial updates
     current_section: Optional[str] = None
     proposed_changes: Optional[Dict[str, Any]] = None
     approval_state: Annotated[Dict[str, Any], merge_dicts] = Field(default_factory=dict)

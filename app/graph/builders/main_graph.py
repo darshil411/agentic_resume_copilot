@@ -54,7 +54,11 @@ def build_main_graph(checkpointer=None) -> StateGraph:
     builder.add_edge("ats_evaluation_node", "trigger_background_workers_node")
     builder.add_edge("trigger_background_workers_node", "resume_subgraph")
     
-    builder.add_edge("resume_subgraph", "final_dashboard_node")
+    from app.graph.nodes.foundation_nodes import final_ats_node
+    builder.add_node("final_ats_node", final_ats_node)
+    
+    builder.add_edge("resume_subgraph", "final_ats_node")
+    builder.add_edge("final_ats_node", "final_dashboard_node")
     builder.add_edge("final_dashboard_node", END)
     
     # Error routes

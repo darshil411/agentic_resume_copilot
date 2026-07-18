@@ -70,16 +70,21 @@ def _build_fallback_jd_analysis(jd_text: str) -> JDAnalysis:
     )
 
 
-def _build_fallback_ats_report(resume: StructuredResume, jd_analysis: JDAnalysis) -> ATSReport:
-    matched = [skill for skill in jd_analysis.required_skills if skill.lower() in {s.lower() for s in resume.skills.languages + resume.skills.frameworks + resume.skills.tools + resume.skills.databases + resume.skills.concepts}]
-    missing = [skill for skill in jd_analysis.required_skills if skill not in matched]
-    score = min(100.0, 55.0 + (len(matched) / max(len(jd_analysis.required_skills), 1)) * 35.0)
+def _build_fallback_ats_report(resume: Any, jd_analysis: JDAnalysis) -> ATSReport:
+    from app.models.ats import ATSReport, ATSCategoryScores
+    missing = jd_analysis.required_skills
     return ATSReport(
-        score=round(score, 1),
-        matched_skills=matched,
+        score=45.0,
+        category_scores=ATSCategoryScores(
+            keyword_match=15.0, experience_alignment=5.0, project_relevance=10.0,
+            quantifiable_impact=5.0, resume_structure=5.0, writing_quality=5.0, penalties=0.0
+        ),
+        matched_skills=[],
         missing_skills=missing,
         weak_sections=["summary", "skills"],
-        improvement_suggestions=[f"Add stronger evidence for {skill}" for skill in missing[:3]],
+        improvement_priorities=["System execution fell back to baseline heuristics."],
+        optimization_guidelines={"summary": ["Manual review required."]},
+        overall_feedback=["Primary evaluation engines encountered an exception."]
     )
 
 
@@ -191,67 +196,174 @@ def jd_analysis_node(state: GlobalGraphState) -> Dict[str, Any]:
         }
 
 
-def ats_evaluation_node(state: GlobalGraphState) -> Dict[str, Any]:
-    """
-    Hybrid node: Deterministic exact match + LLM semantic match.
-    Primary: OpenRouter (gpt-4o-mini)  |  Fallback: Gemini (with key rotation)
-    Reads: original_resume, jd_analysis
-    Writes: ats_report
-    """
-    resume = state.original_resume
-    jd_analysis = state.jd_analysis
+def _evaluate_resume_against_jd(resume: Any, jd_analysis: JDAnalysis) -> ATSReport:
+    """Shared hybrid deterministic/LLM ATS evaluation logic with defensive type-fallback parsing."""
+    import re
+    resume_skills_lower = set()
+    
+    # 1. Safely extract skills keywords whether it is a text block or Pydantic object
+    skills_field = getattr(resume, "skills", None) if resume else None
+    if skills_field:
+        if isinstance(skills_field, str):
+            resume_skills_lower.update(re.findall(r'\b\w+\b', skills_field.lower()))
+        else:
+            try:
+                languages = getattr(skills_field, "languages", []) or []
+                frameworks = getattr(skills_field, "frameworks", []) or []
+                tools = getattr(skills_field, "tools", []) or []
+                databases = getattr(skills_field, "databases", []) or []
+                concepts = getattr(skills_field, "concepts", []) or []
+                for skill in (languages + frameworks + tools + databases + concepts):
+                    if isinstance(skill, str):
+                        resume_skills_lower.add(skill.lower())
+            except Exception:
+                pass
 
-    if not resume or not jd_analysis:
-        return {"errors": ["Missing resume or jd_analysis for ATS evaluation."]}
+    # 2. Tokenize the entire serialized payload string to guarantee full extraction safety
+    try:
+        resume_dump = resume.model_dump_json() if hasattr(resume, "model_dump_json") else str(resume)
+        resume_skills_lower.update(re.findall(r'\b\w+\b', resume_dump.lower()))
+    except Exception:
+        pass
 
-    resume_skills_lower = set(s.lower() for s in resume.skills.languages + resume.skills.frameworks + resume.skills.tools + resume.skills.databases + resume.skills.concepts)
     jd_skills_lower = set(s.lower() for s in jd_analysis.required_skills)
-
     exact_matches = resume_skills_lower.intersection(jd_skills_lower)
     missing_skills = list(jd_skills_lower - resume_skills_lower)
     deterministic_score = len(exact_matches) / max(len(jd_skills_lower), 1) * 50.0
 
-    prompt = f"""
-    Evaluate the resume against the job description.
-    Resume Skills: {resume.skills}
-    Resume Projects: {[p.title for p in resume.projects]}
-    JD Required Skills: {jd_analysis.required_skills}
-    JD Responsibilities: {jd_analysis.responsibilities}
+    # 3. Handle projects rendering defensively
+    projects_field = getattr(resume, "projects", []) if resume else []
+    project_titles = []
+    if isinstance(projects_field, list):
+        for p in projects_field:
+            if isinstance(p, str):
+                project_titles.append(p)
+            elif hasattr(p, "title"):
+                project_titles.append(str(getattr(p, "title")))
+            elif isinstance(p, dict):
+                project_titles.append(str(p.get("title", "")))
+    else:
+        project_titles.append(str(projects_field))
 
-    Deterministic keyword match found these missing skills: {missing_skills}.
-    Assess semantic fit (transferable skills, contextual alignment).
-    Provide a final ATSReport with a score out of 100.
-    """
-
-    # Primary: OpenRouter gpt-4o-mini
     try:
-        llm = get_llm("openrouter", model="openai/gpt-4o-mini").with_structured_output(ATSReport)
-        ats_report = llm.invoke([HumanMessage(content=prompt)])
-        ats_report.matched_skills = list(set(ats_report.matched_skills + list(exact_matches)))
-        return {
-            "ats_report": ats_report,
-            "workflow_logs": ["[OpenRouter/gpt-4o-mini] Successfully ran hybrid ATS evaluation."]
-        }
+        safe_resume_text = resume.model_dump_json() if hasattr(resume, "model_dump_json") else str(resume)
     except Exception:
-        pass  # fall through to Gemini
+        safe_resume_text = str(resume)
 
-    # Fallback: Gemini with key rotation
+    prompt = f"""
+    You are an expert ATS Resume Evaluation Engine used inside an AI Resume Optimization system.
+
+    Your job is NOT to behave like a recruiter. Your job is to objectively evaluate how well a resume matches a specific Job Description and generate a structured ATS report that will be consumed by downstream Resume Optimization agents.
+
+    RESUME:
+    {safe_resume_text}
+
+    JOB DESCRIPTION:
+    Required Skills: {jd_analysis.required_skills}
+    Responsibilities: {jd_analysis.responsibilities}
+    Deterministic Missing Skills: {missing_skills}
+    IMPORTANT RULES:
+            - Be strict, objective, and evidence-based.
+            - Evaluate only what is explicitly present in the resume.
+            - Never invent skills, experience, certifications, achievements, or projects.
+            - Never reward buzzwords without supporting evidence.
+            - Never reward better English alone.
+            - Never reward longer bullets unless they improve ATS relevance.
+            - Treat semantic equivalents as valid matches (e.g. REST APIs ↔ FastAPI, LLM Orchestration ↔ LangGraph) when appropriate.
+            - Repeated keywords should not increase the score.
+            - The same resume evaluated multiple times should produce nearly identical scores (±2 points).
+
+            Evaluate the resume using the following rubric:
+
+            1. Keyword Match (30 Points)
+            Evaluate required technologies, programming languages, frameworks, tools, platforms, libraries, cloud technologies, and domain-specific keywords. Reward exact and strong semantic matches only.
+
+            2. Experience Alignment (15 Points)
+            Evaluate role similarity, responsibilities, seniority alignment, and relevance of professional experience to the target role.
+
+            3. Project Relevance (15 Points)
+            Evaluate technology overlap, domain relevance, implementation complexity, and whether projects demonstrate the required skills.
+
+            4. Quantifiable Impact (10 Points)
+            Evaluate measurable achievements, business impact, percentages, metrics, performance improvements, users served, datasets handled, latency reductions, revenue impact, or any quantified accomplishments.
+
+            5. Resume Structure (10 Points)
+            Evaluate ATS-friendly organization, standard section headings, contact information, readability, and logical structure. Ignore visual formatting and assume plain text parsing.
+
+            6. Writing Quality (10 Points)
+            Evaluate action verbs, concise achievement-oriented bullets, grammar, clarity, and professional tone. Do NOT reward verbosity.
+
+            7. Keyword Stuffing Penalty (-5 Points)
+            Apply only when keywords are unnaturally repeated without adding meaningful context.
+
+            8. Repetition Penalty (-5 Points)
+            Apply only when multiple bullets communicate essentially the same achievement or responsibility.
+
+            SCORING CALIBRATION:
+            - Base the final score ONLY on the rubric above.
+            - Small wording improvements should improve the score by at most 2-5 points.
+            - Significant score improvements should occur ONLY when important JD-relevant evidence is surfaced, existing experience is better aligned to the JD, or valuable keywords are naturally incorporated without fabrication.
+            - Never increase the score simply because the resume sounds more impressive.
+            - Never reduce the score because wording changed if keyword coverage and evidence remain equivalent.
+
+            Return a structured ATS report containing:
+
+            1. Final ATS Score (0-100)
+            2. Category-wise Scores (Return purely the numeric float values as defined by the schema, no text reasoning)
+            3. Matched Skills
+            4. Missing Critical Skills (ignore nice-to-have technologies)
+            5. Weak Resume Sections (Summary, Skills, Projects, Experience, Education)
+            6. Ranked Improvement Priorities (highest impact first)
+            7. Optimization Guidelines for every weak section containing:
+            - What should improve
+            - JD keywords to naturally incorporate
+            - Existing keywords that MUST be preserved
+            - Existing resume evidence that should be emphasized
+            - Things that should NOT be changed
+            8. Overall Feedback (maximum 5 concise actionable points)
+
+            Remember that this report will directly guide downstream optimization agents. Every recommendation must be actionable, specific, and achievable using only the information already present in the resume. Never recommend inventing new experience, projects, skills, certifications, or achievements.
+            """
+
+            
+    
+    # 1. Primary OpenRouter (Forcing determinism with temperature=0.0)
     try:
-        llm = get_llm("gemini").with_structured_output(ATSReport)
+        llm = get_llm("openrouter", model="openai/gpt-4o-mini", temperature=0.0).with_structured_output(ATSReport)
         ats_report = llm.invoke([HumanMessage(content=prompt)])
         ats_report.matched_skills = list(set(ats_report.matched_skills + list(exact_matches)))
-        return {
-            "ats_report": ats_report,
-            "workflow_logs": ["[Gemini fallback] Successfully ran ATS evaluation."]
-        }
+        return ats_report
+    except Exception:
+        pass
+
+    # 2. Fallback Gemini (Forcing determinism)
+    try:
+        llm = get_llm("gemini", temperature=0.0).with_structured_output(ATSReport)
+        ats_report = llm.invoke([HumanMessage(content=prompt)])
+        ats_report.matched_skills = list(set(ats_report.matched_skills + list(exact_matches)))
+        return ats_report
     except Exception as e:
         fallback_ats = _build_fallback_ats_report(resume, jd_analysis)
         fallback_ats.score = round(max(fallback_ats.score, deterministic_score), 1)
-        return {
-            "ats_report": fallback_ats,
-            "workflow_logs": [f"[Hard fallback] Used static ATS scoring. Both providers failed: {e}"]
-        }
+        return fallback_ats
 
+def ats_evaluation_node(state: GlobalGraphState) -> Dict[str, Any]:
+    if not state.original_resume or not state.jd_analysis:
+        return {"errors": ["Missing resume or jd_analysis for ATS evaluation."]}
+    
+    report = _evaluate_resume_against_jd(state.original_resume, state.jd_analysis)
+    return {"ats_report": report, "workflow_logs": ["Successfully ran hybrid ATS evaluation."]}
+
+def final_ats_node(state: GlobalGraphState) -> Dict[str, Any]:
+    # STRICT GUARD: Only run if the HITL loop officially finished all sections
+    if state.current_section != "DONE" or not state.optimized_resume or not state.jd_analysis:
+        return {"workflow_logs": ["Skipped final ATS evaluation (optimization not fully complete)"]}
+
+    report = _evaluate_resume_against_jd(state.optimized_resume, state.jd_analysis)
+    return {
+        "optimized_ats_report": report,
+        "workflow_logs": ["Calculated Final Optimized ATS Score"]
+    } if report else {"workflow_logs": ["Final ATS evaluation failed"]}
 
 def trigger_background_workers_node(state: GlobalGraphState, config: RunnableConfig) -> Dict[str, Any]:
     """

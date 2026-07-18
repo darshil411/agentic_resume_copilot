@@ -203,7 +203,9 @@ async def get_workflow_metadata(thread_id: str):
         active_branches=branches,
         current_review_section=values.get("current_section"),
         completed_sections=[],
-        workflow_logs=values.get("workflow_logs", [])  # <--- NEW DATA SYNCED TO REACT HERE
+        ats_report=values.get("ats_report"),                       # <-- ADD THIS LINE
+        optimized_ats_report=values.get("optimized_ats_report"),
+        workflow_logs=values.get("workflow_logs", [])
     )
 
 @router.get("/resume/task/current/{thread_id}", response_model=ReviewTaskDTO)

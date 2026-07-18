@@ -66,3 +66,40 @@ body {
   background: linear-gradient(to right, #f6f7f8 4%, #edeef1 25%, #f6f7f8 36%);
   background-size: 1000px 100%;
 }
+/* ATS Dashboard Panel Styles */
+.ats-dashboard-panel {
+  display: flex; align-items: center; justify-content: space-around;
+  background: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0; padding: 24px;
+}
+.ats-score-card { text-align: center; padding: 16px; border-radius: 8px; min-width: 140px; }
+.ats-score-card.original { background: #fef2f2; border: 1px solid #fee2e2; }
+.ats-score-card.optimized { background: #ecfdf5; border: 1px solid #d1fae5; }
+.ats-label { font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.ats-label.original { color: #ef4444; }
+.ats-label.optimized { color: #10b981; }
+.ats-score { font-size: 40px; font-weight: 900; margin: 6px 0; }
+.ats-score.original { color: #991b1b; }
+.ats-score.optimized { color: #065f46; }
+
+.ats-arrow-bridge { text-align: center; display: flex; flex-direction: column; align-items: center; }
+.ats-arrow-icon { font-size: 28px; animation: bounceHorizontal 2s infinite; }
+.ats-arrow-icon.positive { color: #10b981; }
+.ats-arrow-icon.negative { color: #ef4444; }
+
+.ats-badge { font-weight: 800; padding: 6px 14px; border-radius: 20px; font-size: 12px; margin-top: 4px; }
+.ats-badge.positive { color: #065f46; background: #d1fae5; border: 1px solid #10b981; }
+.ats-badge.negative { color: #991b1b; background: #fee2e2; border: 1px solid #ef4444; }
+
+.improvement-breakdown { padding: 16px; border-radius: 8px; border: 1px solid transparent; }
+.improvement-breakdown.positive { background: #f0fdf4; border-color: #bbf7d0; }
+.improvement-breakdown.positive h4 { color: #166534; font-size: 13px; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase; }
+.improvement-breakdown.positive p { margin: 0; font-size: 14px; color: #15803d; }
+.improvement-breakdown.negative { background: #fff7ed; border-color: #ffedd5; }
+.improvement-breakdown.negative h4 { color: #9a3412; font-size: 13px; font-weight: bold; margin: 0 0 6px 0; text-transform: uppercase; }
+.improvement-breakdown.negative p { margin: 0; font-size: 14px; color: #c2410c; }
+.ats-calculating-msg { padding: 30px; text-align: center; color: #64748b; background: #f8fafc; border-radius: 12px; border: 1px dashed #cbd5e1; }
+
+@keyframes bounceHorizontal {
+  0%, 100% { transform: translateX(-5px); }
+  50% { transform: translateX(5px); }
+}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { exportService } from '../../services/exportService';
+import { useWorkflowStatus } from '../../hooks/useWorkflowStatus'; // <-- ADD THIS LINE
 import { WorkflowStatus } from '../../models/enums';
 import { Download, FileText, MessageSquare, Send } from 'lucide-react';
 
@@ -9,7 +10,7 @@ export default function ExportWorkspace() {
     const [status, setStatus] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
-
+    const { data: workflowMeta } = useWorkflowStatus(threadId, 5000);
     useEffect(() => {
         let interval;
         const fetchStatus = async () => {
@@ -65,10 +66,69 @@ export default function ExportWorkspace() {
         }
     ];
 
+    const origReport = workflowMeta?.ats_report;
+    const optReport = workflowMeta?.optimized_ats_report;
+    const origMissing = origReport?.missing_skills || [];
+    const optMissing = optReport?.missing_skills || [];
+    const resolvedSkills = origMissing.filter(s => !optMissing.includes(s));
+    const newlyMissingSkills = optMissing.filter(s => !origMissing.includes(s));
+
     return (
-        <div className="max-w-4xl space-y-6">
-            <h2 className="text-2xl font-bold text-navy mb-6">Export Hub</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="max-w-4xl space-y-6 pb-12">
+            <h2 className="text-2xl font-bold text-navy mb-2">Export Hub</h2>
+
+            {/* --- ATS Dashboard Panel --- */}
+            {origReport && optReport ? (
+                <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm mb-8">
+                    <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-6">Optimization Impact</h3>
+                    <div className="ats-dashboard-panel">
+                        <div className="ats-score-card original">
+                            <span className="ats-label original">Original Match</span>
+                            <div className="ats-score original">{origReport.score || 0}%</div>
+                        </div>
+
+                        <div className="ats-arrow-bridge">
+                            <div className={`ats-arrow-icon ${optReport.score >= origReport.score ? 'positive' : 'negative'}`}>➡️</div>
+                            <div className={`ats-badge ${optReport.score >= origReport.score ? 'positive' : 'negative'}`}>
+                                {optReport.score >= origReport.score 
+                                    ? `+${optReport.score - origReport.score} Points` 
+                                    : `${optReport.score - origReport.score} Points`}
+                            </div>
+                        </div>
+
+                        <div className="ats-score-card optimized">
+                            <span className="ats-label optimized">Optimized Match</span>
+                            <div className="ats-score optimized">{optReport.score || 0}%</div>
+                        </div>
+                    </div>
+
+                    {(resolvedSkills.length > 0 || newlyMissingSkills.length > 0) && (
+                        <div className="flex flex-col md:flex-row gap-4 mt-6">
+                            {resolvedSkills.length > 0 && (
+                                <div className="improvement-breakdown positive flex-1">
+                                    <h4>✓ Targeted Skills Added</h4>
+                                    <p>{resolvedSkills.join(', ')}</p>
+                                </div>
+                            )}
+                            {newlyMissingSkills.length > 0 && (
+                                <div className="improvement-breakdown negative flex-1">
+                                    <h4>⚠️ Dropped Keywords</h4>
+                                    <p>{newlyMissingSkills.join(', ')}</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <div className="ats-calculating-msg mb-8">
+                    <div className="animate-pulse flex items-center justify-center gap-3">
+                        <div className="h-4 w-4 rounded-full bg-blue-400"></div>
+                        Generating final competitive analysis metrics...
+                    </div>
+                </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8 border-t border-gray-200 pt-8">
                 {cards.map((card) => {
                     const Icon = card.icon;
                     return (

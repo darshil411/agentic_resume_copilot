@@ -190,13 +190,20 @@ export default function ResumeWorkspace() {
     const { threadId } = useParams();
     const navigate = useNavigate();
     const { task, isLoading, error, approve, regenerate, skip } = useResumeTask(threadId, 3000);
-    const [feedback, setFeedback] = useState('');
-    const [actionLoading, setActionLoading] = useState(false);
-        // PASTE THIS LINE RIGHT HERE:
-    const { data, workflow: workflowAlias } = useWorkflowStatus(threadId);
     
-    // (This safely handles it whether your hook returns 'data' or 'workflow')
+    const [feedback, setFeedback] = useState('');
+    const [isOptimistic, setIsOptimistic] = useState(false);
+    const [localError, setLocalError] = useState(null);
+    
+    const { data, workflow: workflowAlias } = useWorkflowStatus(threadId);
     const workflow = data || workflowAlias;
+
+    // Automatically clear the loading skeleton and errors when the backend sends the next section
+    useEffect(() => {
+        setIsOptimistic(false);
+        setLocalError(null);
+    }, [task?.section, task?.version]);
+
     if (isLoading && !task) {
         return (
             <div className="flex gap-6">
@@ -271,46 +278,59 @@ export default function ResumeWorkspace() {
         );
     }
 
+    // Show the optimistic UI skeleton instantly when a button is clicked
+    if (isOptimistic) {
+        return (
+            <Layout>
+                <ResumePaneSkeleton />
+            </Layout>
+        );
+    }
+
     if (task.status === WorkflowStatus.ACTION_REQUIRED) {
         const handleApprove = async () => {
-            setActionLoading(true);
+            setIsOptimistic(true);
+            setLocalError(null);
             try {
                 await approve(task.task_id, task.version, feedback);
                 setFeedback('');
             } catch (err) {
-                alert("Action failed: " + err.message);
-            } finally {
-                setActionLoading(false);
+                setIsOptimistic(false);
+                setLocalError("Network error: Failed to approve. Please try again.");
             }
         };
-
         const handleRegenerate = async () => {
-            setActionLoading(true);
+            setIsOptimistic(true);
+            setLocalError(null);
             try {
                 await regenerate(task.task_id, task.version, feedback);
                 setFeedback('');
             } catch (err) {
-                alert("Action failed: " + err.message);
-            } finally {
-                setActionLoading(false);
+                setIsOptimistic(false);
+                setLocalError("Network error: Failed to regenerate. Please try again.");
             }
         };
-
         const handleSkip = async () => {
-            setActionLoading(true);
+            setIsOptimistic(true);
+            setLocalError(null);
             try {
                 await skip(task.task_id, task.version);
                 setFeedback('');
             } catch (err) {
-                alert("Action failed: " + err.message);
-            } finally {
-                setActionLoading(false);
+                setIsOptimistic(false);
+                setLocalError("Network error: Failed to skip. Please try again.");
             }
         };
 
         return (
             <Layout>
                 <div className="space-y-4">
+                    {/* Display error message if the API fails */}
+                    {localError && (
+                        <div className="bg-red-50 text-red-600 p-3 rounded-lg border border-red-200 text-sm font-medium">
+                            {localError}
+                        </div>
+                    )}
                     {/* Section header */}
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                         <div className="flex items-center gap-3 mb-1">
@@ -359,21 +379,21 @@ export default function ResumeWorkspace() {
                         <div className="flex gap-3 mt-3">
                             <button
                                 onClick={handleSkip}
-                                disabled={actionLoading}
+                                disabled={isOptimistic}
                                 className="px-4 py-2.5 border border-gray-300 text-gray-500 rounded-lg font-medium hover:bg-gray-100 transition-colors disabled:opacity-50"
                             >
                                 Skip
                             </button>
                             <button
                                 onClick={handleRegenerate}
-                                disabled={actionLoading}
+                                disabled={isOptimistic}
                                 className="flex-1 py-2.5 px-4 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                             >
                                 <RotateCcw className="w-4 h-4" /> Try Again
                             </button>
                             <button
                                 onClick={handleApprove}
-                                disabled={actionLoading}
+                                disabled={isOptimistic}
                                 className="flex-1 py-2.5 px-4 bg-navy text-white rounded-lg font-medium hover:bg-blue-800 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                             >
                                 <Check className="w-4 h-4" /> Approve & Continue
@@ -399,6 +419,29 @@ export default function ResumeWorkspace() {
                         className="mt-2 py-2.5 px-8 bg-navy text-white rounded-lg font-medium hover:bg-blue-800 transition-colors"
                     >
                         Go to Export Hub
+                    </button>
+                </div>
+            </Layout>
+        );
+    }
+
+    // Handle Workflow Failure state to prevent White Screen of Death
+    if (task.status === WorkflowStatus.FAILED) {
+        return (
+            <Layout>
+                <div className="flex flex-col items-center justify-center h-64 text-center space-y-4 bg-white rounded-xl border border-red-200 p-8">
+                    <div className="bg-red-100 p-4 rounded-full text-red-600 font-bold text-xl">
+                        ⚠️
+                    </div>
+                    <h2 className="text-2xl font-bold text-red-700">Workflow Processing Failed</h2>
+                    <p className="text-gray-500 max-w-md text-sm">
+                        The background optimization engine encountered an compilation or API execution failure.
+                    </p>
+                    <button
+                        onClick={() => navigate('/')}
+                        className="mt-2 py-2.5 px-8 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors"
+                    >
+                        Return to Portal & Start Over
                     </button>
                 </div>
             </Layout>
