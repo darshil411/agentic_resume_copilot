@@ -7,7 +7,7 @@ import re
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-
+import logging
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Request # pyright: ignore[reportMissingImports]
 from fastapi.responses import PlainTextResponse # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel # pyright: ignore[reportMissingImports]
@@ -16,6 +16,8 @@ from langgraph.types import Command # pyright: ignore[reportMissingImports]
 from app.graph.builders.main_graph import build_main_graph
 from app.utils.sqlite_checkpoint import get_checkpointer
 from app.workers.background_jobs import init_bg_slot, get_interview_result, get_outreach_result
+from app.services.project_document_loader import extract_text_from_file
+from app.services.project_context_service import select_relevant_projects, build_project_context
 
 from app.api.dtos.enums import WorkflowStatus
 from app.api.dtos.workflow_dto import WorkflowMetadataDTO, BranchStatuses
@@ -29,6 +31,11 @@ checkpointer = get_checkpointer()
 app_graph = build_main_graph(checkpointer=checkpointer)
 _executor = ThreadPoolExecutor(max_workers=4)
 
+logger = logging.getLogger(__name__)
+
+
+ALLOWED_PROJECT_EXTENSIONS = {".md", ".txt", ".pdf"}
+MAX_PROJECT_FILES = 5
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 UPLOADS_DIR = os.path.join(ROOT_DIR, "data", "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -144,6 +151,7 @@ async def start_workflow(
     background_tasks: BackgroundTasks,
     resume: UploadFile = File(...),
     job_description: str = Form(...),
+    project_docs: Optional[List[UploadFile]] = File(None)
 ):
     file_ext = os.path.splitext(resume.filename or "resume")[1] or ".pdf"
     saved_filename = f"{uuid.uuid4()}{file_ext}"
@@ -151,6 +159,75 @@ async def start_workflow(
 
     with open(saved_path, "wb") as f:
         shutil.copyfileobj(resume.file, f)
+
+    project_texts = []
+
+    if project_docs:
+
+        if len(project_docs) > MAX_PROJECT_FILES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Maximum {MAX_PROJECT_FILES} project documents allowed."
+            )
+
+        for pdoc in project_docs:
+
+            if not pdoc.filename:
+                continue
+
+            ext = os.path.splitext(pdoc.filename)[1].lower()
+
+            if ext not in ALLOWED_PROJECT_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type: {ext}"
+                )
+
+            p_saved = f"{uuid.uuid4()}{ext}"
+            p_path = os.path.join(UPLOADS_DIR, p_saved)
+
+            try:
+                with open(p_path, "wb") as f:
+                    shutil.copyfileobj(pdoc.file, f)
+
+                text = extract_text_from_file(p_path)
+
+                if text.strip():
+                    project_texts.append(text)
+
+                    logger.info(
+                        "Loaded project document '%s' (%d chars)",
+                        pdoc.filename,
+                        len(text),
+                    )
+
+            finally:
+                if os.path.exists(p_path):
+                    os.remove(p_path)
+
+    selected_project_context = None
+
+    if project_texts:
+
+        selected_texts = select_relevant_projects(
+            job_description,
+            project_texts
+        )
+
+        logger.info(
+            "Selected %d project documents",
+            len(selected_texts),
+        )
+
+        if selected_texts:
+            selected_project_context = build_project_context(
+                selected_texts
+            )
+
+            logger.info(
+                "Compressed project context (%d chars)",
+                len(selected_project_context or "")
+            )
 
     thread_id = str(uuid.uuid4())
     _workflow_creation_times[thread_id] = datetime.now()
@@ -160,14 +237,24 @@ async def start_workflow(
     initial_state = {
         "resume_file_path": saved_path,
         "job_description_text": job_description,
+        "selected_project_context": selected_project_context,
         "workflow_logs": [],
         "errors": [],
         "current_section": "summary",
         "branch_status": {}
     }
 
-    background_tasks.add_task(_advance_graph, thread_id, None, initial_state)
-    return {"thread_id": thread_id, "status": "RUNNING"}
+    background_tasks.add_task(
+        _advance_graph,
+        thread_id,
+        None,
+        initial_state
+    )
+
+    return {
+        "thread_id": thread_id,
+        "status": "RUNNING"
+    }
 
 @router.get("/workflow/{thread_id}", response_model=WorkflowMetadataDTO)
 async def get_workflow_metadata(thread_id: str):

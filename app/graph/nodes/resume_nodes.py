@@ -73,42 +73,134 @@ SECTION_PROMPTS = {
     """,
 
     "projects": """
-    OBJECTIVE:
-    Rewrite project descriptions to emphasize engineering complexity, architecture, ownership, and technical impact.
+    OBJECTIVE
 
-    RULES:
-    - Use strong engineering action verbs.
-    - Focus on:
-      architecture,
-      backend systems,
-      scalability,
-      orchestration,
-      APIs,
-      performance,
-      automation,
-      AI workflows.
-    - Explain WHAT was built,
-      HOW it was built,
-      WHY it mattered.
-    - Quantify impact ONLY if clearly supported by the original content.
-    - If metrics are unavailable, improve technical depth WITHOUT inventing fake numbers.
-    - Mention technologies naturally within bullets.
-    - Avoid generic resume filler language.
+    Produce the strongest possible Projects section for THIS specific Job Description.
 
-    BULLET STYLE:
-    - Architected...
-    - Developed...
-    - Engineered...
-    - Implemented...
-    - Optimized...
+    The output should maximize:
 
-    STRICT RULES:
-    - NO hallucinated companies/users/revenue.
-    - NO fake scaling claims.
-    - NO fake production metrics.
+    • ATS score
+    • Technical credibility
+    • Engineering depth
+    • Recruiter impact
 
-    OUTPUT:
-    Clean markdown bullet points only.
+    PROCESS
+
+    1. Compare every project available.
+
+    2. Rank projects by relevance to the Job Description.
+
+    3. Select the best projects.
+
+    4. Rewrite them using the richest available technical evidence.
+
+    5. Remove weaker or redundant projects if necessary.
+
+    WHAT TO EMPHASIZE
+
+    • System design
+
+    • Architecture
+
+    • Backend engineering
+
+    • APIs
+
+    • AI workflows
+
+    • RAG
+
+    • LangGraph
+
+    • Performance
+
+    • Scalability
+
+    • Automation
+
+    • Engineering ownership
+
+    • Technical challenges solved
+
+    • Quantifiable impact
+
+    WHEN AVAILABLE
+
+    Mention naturally
+
+    • Languages
+
+    • Frameworks
+
+    • Libraries
+
+    • Databases
+
+    • Cloud
+
+    • AI Models
+
+    • Vector Databases
+
+    • DevOps
+
+    • Infrastructure
+
+    • Testing
+
+    • Security
+
+    STYLE
+
+    Every bullet should answer
+
+    What was built?
+
+    How was it built?
+
+    Why was it valuable?
+
+    Prefer strong engineering verbs.
+
+    Architected
+
+    Designed
+
+    Engineered
+
+    Implemented
+
+    Developed
+
+    Optimized
+
+    Integrated
+
+    Automated
+
+    STRICT RULES
+
+    Never invent information.
+
+    Never invent metrics.
+
+    Never invent technologies.
+
+    Never invent architecture.
+
+    Never invent responsibilities.
+
+    Do not keyword stuff.
+
+    Only use evidence from:
+
+    1. Resume
+
+    2. Project Knowledge Base
+
+    OUTPUT
+
+    Return ONLY the final Projects section in clean resume-ready markdown.
     """,
 
     "experience": """
@@ -218,6 +310,76 @@ def optimize_section_node(state: GlobalGraphState) -> Dict[str, Any]:
         """
     )
 
+    project_context_block = f"""
+    ====================================================
+    PROJECT KNOWLEDGE BASE
+    ====================================================
+
+    You now have TWO independent sources of project information.
+
+    SOURCE A
+    ---------
+    The Projects section already present in the resume.
+
+    SOURCE B
+    ---------
+    A structured Project Knowledge Base generated from uploaded project documentation.
+
+    The uploaded documentation belongs to the SAME candidate.
+
+    It usually contains significantly richer technical details than the resume.
+
+    ====================================================
+
+    YOUR TASK
+
+    Before generating the final Projects section:
+
+    1. Read BOTH sources.
+
+    2. Match projects that represent the same work.
+
+    3. Use the Project Knowledge Base to enrich existing resume projects.
+
+    4. Compare every project against the Job Description.
+
+    5. Select ONLY the strongest and most relevant projects.
+
+    6. You MAY reorder projects.
+
+    7. You MAY replace weaker projects with stronger uploaded projects if they are more relevant.
+
+    Your objective is NOT to preserve the original ordering.
+
+    Your objective is to maximize ATS score while remaining completely truthful.
+
+    ====================================================
+
+    STRICT RULES
+
+    Never invent projects.
+
+    Never invent technologies.
+
+    Never invent architecture.
+
+    Never invent achievements.
+
+    Never invent metrics.
+
+    Never merge unrelated projects.
+
+    Never use information that is not present in either source.
+
+    ====================================================
+
+    PROJECT KNOWLEDGE BASE
+
+    {state.selected_project_context}
+
+    ====================================================
+    """
+
     prompt = f"""
     You are a senior technical resume strategist specializing in software engineering, AI systems, backend engineering, and agentic AI workflows.
 
@@ -233,7 +395,7 @@ def optimize_section_node(state: GlobalGraphState) -> Dict[str, Any]:
     -------------------------
     {current_text}
     -------------------------
-
+    {project_context_block}
     {feedback_block}
 
     SECTION-SPECIFIC OPTIMIZATION INSTRUCTIONS:

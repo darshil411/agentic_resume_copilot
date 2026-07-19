@@ -11,6 +11,7 @@ class GlobalGraphState(BaseModel):
     # Core Inputs
     resume_file_path: Optional[str] = None
     job_description_text: Optional[str] = None
+    selected_project_context: Optional[str] = None
     
     # Foundation Nodes Output
     resume_text: Optional[str] = None
