@@ -5,6 +5,10 @@ from fastapi import FastAPI # pyright: ignore[reportMissingImports]
 from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissingImports]
 import uvicorn # pyright: ignore[reportMissingImports]
 
+# Ensure required directories exist to prevent file crashes on platforms like Render
+os.makedirs("data/uploads", exist_ok=True)
+os.makedirs("data", exist_ok=True)
+
 # Ensure root directory is in python path and load .env before any other imports
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
@@ -23,14 +27,16 @@ app = FastAPI(
 )
 
 # 2. Configure CORS Middleware (Crucial Connection Layer)
-# This explicitly signals the browser to permit cross-origin JavaScript requests.
+# Read the domain from the environment, default to localhost for local testing
+cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    # REPLACE ["*"] with your exact local frontend URLs
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],             
-    allow_headers=["*"],             
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # 3. Include Workflow Routes

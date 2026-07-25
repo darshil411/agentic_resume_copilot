@@ -4,6 +4,7 @@ import { exportService } from '../../services/exportService';
 import { useWorkflowStatus } from '../../hooks/useWorkflowStatus'; // <-- ADD THIS LINE
 import { WorkflowStatus } from '../../models/enums';
 import { Download, FileText, MessageSquare, Send } from 'lucide-react';
+import { API_BASE } from '../../services/apiClient';
 
 export default function ExportWorkspace() {
     const { threadId } = useParams();
@@ -31,7 +32,7 @@ export default function ExportWorkspace() {
     }, [threadId]);
 
     const handleDownload = (type) => {
-        window.open(`/api/v1/exports/${threadId}/${type}`, '_blank');
+        window.open(`${API_BASE}/exports/${threadId}/${type}`, '_blank');
     };
 
     if (isLoading) {

@@ -5,6 +5,8 @@ import { WorkflowStatus } from '../../models/enums';
 import { ResumePaneSkeleton } from '../common/SkeletonLoaders';
 import { Check, RotateCcw, User, Briefcase, Code, BookOpen, Award } from 'lucide-react';
 import { useWorkflowStatus } from '../../hooks/useWorkflowStatus';
+import { fetchJson } from '../../services/apiClient';
+
 // ---------------------------------------------------------------------------
 // OriginalResumePanel — fetches and displays structured resume in a flex card
 // ---------------------------------------------------------------------------
@@ -16,11 +18,8 @@ function OriginalResumePanel({ threadId }) {
         let mounted = true;
         const poll = async () => {
             try {
-                const res = await fetch(`/api/v1/original-resume/${threadId}`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (mounted) setResume(data);
-                }
+                const data = await fetchJson(`/original-resume/${threadId}`);
+                if (mounted) setResume(data);
             } catch (_) {}
             finally { if (mounted) setLoading(false); }
         };
