@@ -1,32 +1,31 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { workflowService } from '../services/workflowService';
+import { useState, useEffect } from 'react';
+import { workflowStream } from '../services/workflowStream';
 
-export function useWorkflowStatus(threadId, pollInterval = 5000) {
+export function useWorkflowStatus(threadId) {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
-    const intervalRef = useRef(null);
-
-    const fetchData = useCallback(async () => {
-        if (!threadId) return;
-        try {
-            const result = await workflowService.getWorkflowStatus(threadId);
-            setData(result);
-            setError(null);
-        } catch (err) {
-            setError(err);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [threadId]);
 
     useEffect(() => {
-        fetchData();
-        intervalRef.current = setInterval(fetchData, pollInterval);
-        return () => clearInterval(intervalRef.current);
-    }, [fetchData, pollInterval]);
+        if (!threadId) return;
+        
+        setIsLoading(true);
+        
+        const unsubscribe = workflowStream.subscribe(threadId, 'workflow_update', (newData, err) => {
+            if (err) {
+                setError(err);
+                setIsLoading(false);
+            } else if (newData) {
+                setData(newData);
+                setError(null);
+                setIsLoading(false);
+            }
+        });
 
-    const invalidate = () => fetchData();
+        return () => unsubscribe();
+    }, [threadId]);
+
+    const invalidate = () => { /* No-op with SSE */ };
 
     return { data, error, isLoading, invalidate };
 }

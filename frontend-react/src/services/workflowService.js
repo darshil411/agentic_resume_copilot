@@ -22,13 +22,5 @@ export const workflowService = {
             method: 'POST',
             body: formData
         });
-    },
-
-    /**
-     * @param {string} threadId 
-     * @returns {Promise<import('../models/dtos').WorkflowMetadataDTO>}
-     */
-    async getWorkflowStatus(threadId) {
-        return await fetchJson(`/workflow/${threadId}`);
     }
 };

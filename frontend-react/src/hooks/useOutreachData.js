@@ -1,35 +1,29 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { outreachService } from '../services/outreachService';
+import { useState, useEffect } from 'react';
+import { workflowStream } from '../services/workflowStream';
 
-export function useOutreachData(threadId, pollInterval = 5000) {
+export function useOutreachData(threadId) {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
-    const intervalRef = useRef(null);
-
-    const fetchData = useCallback(async () => {
-        if (!threadId) return;
-        try {
-            const result = await outreachService.getOutreachWorkspace(threadId);
-            setData(result);
-            setError(null);
-        } catch (err) {
-            setError(err);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [threadId]);
 
     useEffect(() => {
-        fetchData();
-        // Stop polling if data is ready
-        if (data?.status === 'READY' || data?.status === 'FAILED') {
-            clearInterval(intervalRef.current);
-            return;
-        }
-        intervalRef.current = setInterval(fetchData, pollInterval);
-        return () => clearInterval(intervalRef.current);
-    }, [fetchData, pollInterval, data?.status]);
+        if (!threadId) return;
+
+        setIsLoading(true);
+
+        const unsubscribe = workflowStream.subscribe(threadId, 'outreach_update', (newData, err) => {
+            if (err) {
+                setError(err);
+                setIsLoading(false);
+            } else if (newData) {
+                setData(newData);
+                setError(null);
+                setIsLoading(false);
+            }
+        });
+
+        return () => unsubscribe();
+    }, [threadId]);
 
     return { data, error, isLoading };
 }

@@ -1,13 +1,6 @@
 import { fetchJson } from './apiClient';
 
 export const resumeService = {
-    /**
-     * @param {string} threadId 
-     * @returns {Promise<import('../models/dtos').ReviewTaskDTO>}
-     */
-    async getCurrentTask(threadId) {
-        return await fetchJson(`/resume/task/current/${threadId}`);
-    },
 
     /**
      * @param {string} threadId 

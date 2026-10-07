@@ -12,6 +12,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File,
 from fastapi.responses import PlainTextResponse # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel # pyright: ignore[reportMissingImports]
 from langgraph.types import Command # pyright: ignore[reportMissingImports]
+from sse_starlette.sse import EventSourceResponse
+import asyncio
 
 from app.graph.builders.main_graph import build_main_graph
 from app.utils.sqlite_checkpoint import get_checkpointer
@@ -440,6 +442,98 @@ async def get_outreach_data(thread_id: str):
         referrals=referrals,
         followups=followups
     )
+
+@router.get("/workflow/stream/{thread_id}")
+async def stream_workflow(request: Request, thread_id: str):
+    async def event_generator():
+        last_workflow_hash = None
+        last_task_hash = None
+        last_interview_hash = None
+        last_outreach_hash = None
+
+        # Send an immediate ping to establish connection
+        yield {"event": "ping", "data": "connected"}
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                # 1. Workflow Metadata
+                try:
+                    workflow_data = await get_workflow_metadata(thread_id)
+                    workflow_dict = workflow_data.model_dump(mode='json')
+                    current_workflow_hash = json.dumps(workflow_dict, sort_keys=True)
+                    if current_workflow_hash != last_workflow_hash:
+                        last_workflow_hash = current_workflow_hash
+                        yield {
+                            "event": "workflow_update",
+                            "data": current_workflow_hash
+                        }
+                except Exception as e:
+                    logger.error("SSE workflow metadata error: %s", e)
+
+                # 2. Resume Task
+                try:
+                    task_data = await get_current_resume_task(thread_id)
+                    # Exclude created_at since it uses datetime.now() in the endpoint
+                    task_compare = {
+                        "task_id": task_data.task_id,
+                        "version": task_data.version,
+                        "status": task_data.status,
+                        "section": task_data.section,
+                        "proposal": task_data.proposal
+                    }
+                    current_task_hash = json.dumps(task_compare, sort_keys=True)
+                    if current_task_hash != last_task_hash:
+                        last_task_hash = current_task_hash
+                        task_dict = task_data.model_dump(mode='json')
+                        yield {
+                            "event": "task_update",
+                            "data": json.dumps(task_dict)
+                        }
+                except Exception as e:
+                    logger.error("SSE task error: %s", e)
+
+                # 3. Interview Data
+                try:
+                    interview_data = await get_interview_data(thread_id)
+                    interview_dict = interview_data.model_dump(mode='json')
+                    current_interview_hash = json.dumps(interview_dict, sort_keys=True)
+                    if current_interview_hash != last_interview_hash:
+                        last_interview_hash = current_interview_hash
+                        yield {
+                            "event": "interview_update",
+                            "data": current_interview_hash
+                        }
+                except Exception as e:
+                    logger.error("SSE interview error: %s", e)
+
+                # 4. Outreach Data
+                try:
+                    outreach_data = await get_outreach_data(thread_id)
+                    outreach_dict = outreach_data.model_dump(mode='json')
+                    current_outreach_hash = json.dumps(outreach_dict, sort_keys=True)
+                    if current_outreach_hash != last_outreach_hash:
+                        last_outreach_hash = current_outreach_hash
+                        yield {
+                            "event": "outreach_update",
+                            "data": current_outreach_hash
+                        }
+                except Exception as e:
+                    logger.error("SSE outreach error: %s", e)
+
+                # Keep-alive ping
+                yield {"event": "ping", "data": "keepalive"}
+
+            except Exception as e:
+                logger.error("SSE loop error: %s", e)
+
+            # Wait 5 seconds before next state check (preserves existing polling interval)
+            await asyncio.sleep(5)
+
+    return EventSourceResponse(event_generator())
+
 
 
 import re

@@ -1,72 +1,53 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { resumeService } from '../services/resumeService';
+import { workflowStream } from '../services/workflowStream';
 
-export function useResumeTask(threadId, pollInterval = 5000) {
+export function useResumeTask(threadId) {
     const [task, setTask] = useState(null);
     const [error, setError] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
-    const intervalRef = useRef(null);
-
-    const [isInitialLoad, setIsInitialLoad] = useState(true);
-    const abortControllerRef = useRef(null);
     const isMutatingRef = useRef(false);
 
-    const fetchTask = useCallback(async (isSilent = false) => {
-        if (!threadId || isMutatingRef.current) return;
-
-        if (abortControllerRef.current) abortControllerRef.current.abort();
-        abortControllerRef.current = new AbortController();
-
-        if (!isSilent && isInitialLoad) setIsLoading(true);
-
-        try {
-            const currentAbort = abortControllerRef.current;
-            const result = await resumeService.getCurrentTask(threadId);
-            
-            if (currentAbort.signal.aborted) return;
-
-            setTask(prevTask => {
-                if (
-                    prevTask &&
-                    prevTask.section === result.section &&
-                    prevTask.version === result.version &&
-                    prevTask.status === result.status &&
-                    prevTask.proposal === result.proposal
-                ) {
-                    return prevTask; // Drop identical network payloads to prevent DOM flashes
-                }
-                return result;
-            });
-            setError(null);
-        } catch (err) {
-            if (abortControllerRef.current?.signal.aborted) return;
-            const status = err?.status;
-            if (status && status >= 400 && status < 500) setError(err);
-        } finally {
-            if (!isSilent && !isMutatingRef.current && !abortControllerRef.current?.signal.aborted) {
-                setIsLoading(false);
-                setIsInitialLoad(false);
-            }
-        }
-    }, [threadId, isInitialLoad]);
-
     useEffect(() => {
-        fetchTask();
-        intervalRef.current = setInterval(() => fetchTask(true), pollInterval);
-        return () => {
-            clearInterval(intervalRef.current);
-            if (abortControllerRef.current) abortControllerRef.current.abort();
-        };
-    }, [fetchTask, pollInterval]);
+        if (!threadId) return;
+
+        setIsLoading(true);
+
+        const unsubscribe = workflowStream.subscribe(threadId, 'task_update', (newData, err) => {
+            if (err) {
+                setError(err);
+                setIsLoading(false);
+            } else if (newData) {
+                setTask(prevTask => {
+                    // Prevent flashes by dropping identical payloads
+                    if (
+                        prevTask &&
+                        prevTask.section === newData.section &&
+                        prevTask.version === newData.version &&
+                        prevTask.status === newData.status &&
+                        prevTask.proposal === newData.proposal
+                    ) {
+                        return prevTask;
+                    }
+                    return newData;
+                });
+                setError(null);
+                setIsLoading(false);
+            }
+        });
+
+        return () => unsubscribe();
+    }, [threadId]);
 
     const executeWithLock = async (mutationCall) => {
+        if (isMutatingRef.current) return;
         isMutatingRef.current = true;
         try {
             await mutationCall();
         } finally {
-            // Give LangGraph 500ms to save the SQL checkpoint before we fetch the next state
+            // Keep the lock for 500ms to debounce double-clicks while SSE propagates the state update
             setTimeout(() => {
-                fetchTask(true).finally(() => { isMutatingRef.current = false; });
+                isMutatingRef.current = false;
             }, 500);
         }
     };
@@ -83,7 +64,7 @@ export function useResumeTask(threadId, pollInterval = 5000) {
         await executeWithLock(() => resumeService.skipTask(threadId, taskId, version));
     };
 
-    const invalidate = () => fetchTask();
+    const invalidate = () => { /* No-op with SSE */ };
 
     return { task, error, isLoading, approve, regenerate, skip, invalidate };
 }
