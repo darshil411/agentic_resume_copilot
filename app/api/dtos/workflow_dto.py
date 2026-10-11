@@ -18,3 +18,4 @@ class WorkflowMetadataDTO(BaseModel):
     ats_report: Optional[Any] = None            # <-- ADD THIS LINE
     optimized_ats_report: Optional[Any] = None
     workflow_logs: List[str] = []
+    error_message: Optional[str] = None

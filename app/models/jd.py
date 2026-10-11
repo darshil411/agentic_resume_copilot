@@ -9,4 +9,4 @@ class JDAnalysis(BaseModel):
     responsibilities: List[str] = Field(description="Key responsibilities and duties")
     keywords: List[str] = Field(description="ATS keywords extracted from the JD")
     tools: List[str] = Field(description="Specific tools, software, or platforms mentioned")
-    experience_requirements: str = Field(description="Years or depth of experience required")
+    experience_requirements: str = Field(default="", description="Years or depth of experience required")

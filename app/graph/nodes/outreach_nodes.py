@@ -32,7 +32,7 @@ _FALLBACK_FOLLOWUP = [
 def generate_outreach_templates_node(state: GlobalGraphState) -> Dict[str, Any]:
     """
     LLM Node: Generates outreach templates (cold email, referral, follow-up).
-    Primary: Groq (llama-3.1-8b-instant)  |  Fallback: Gemini (with key rotation)
+    Primary: Groq (llama-3.3-70b-versatile)  |  Fallback: Gemini (with key rotation)
     Operates on original_resume and jd_analysis — independent of optimization pipeline.
     """
     resume = state.original_resume

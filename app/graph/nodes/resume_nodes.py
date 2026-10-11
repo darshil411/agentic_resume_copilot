@@ -491,6 +491,224 @@ def approval_processing_node(state: GlobalGraphState) -> Dict[str, Any]:
         "workflow_logs": [f"Regenerating: {section} - Attempt {current_count + 1}"]
     }
 
+def _apply_projects_proposal(new_content: str, original_projects: Any) -> Any:
+    """Merge an LLM-generated Markdown projects section back onto the original
+    Project objects, preserving metadata (title, tech_stack, urls).
+
+    Strategy:
+    1. Parse the Markdown for project headings (### Title) and the bullet
+       lines that follow each heading.
+    2. For each parsed heading, find the best-matching original Project by
+       title (case-insensitive substring match).  If a match is found,
+       update only its `description` (and optionally tech_stack from
+       backtick-fenced tech hints) while keeping all other metadata intact.
+    3. Any original project that was NOT mentioned in the optimized output
+       is KEPT as-is (the optimizer may legitimately reduce the list, but
+       we prefer not to silently drop projects whose heading the LLM merely
+       reformatted).
+    4. If the Markdown cannot be parsed at all, return the original list
+       unchanged so we never corrupt the state.
+
+    Returns a list of Project model instances.
+    """
+    from app.models.resume import Project
+    import re
+
+    # Normalise original_projects to a list of Project instances
+    if not original_projects:
+        return []
+
+    orig_list: list = []
+    for p in original_projects:
+        if isinstance(p, dict):
+            try:
+                orig_list.append(Project(**p))
+            except Exception:
+                pass
+        elif isinstance(p, Project):
+            orig_list.append(p)
+
+    if not orig_list:
+        return original_projects  # nothing to merge into
+
+    # ── Parse the Markdown ──────────────────────────────────────────────
+    # Accept headings: ### Title, ## Title, **Title**, or "Title:"
+    heading_re = re.compile(
+        r'^(?:#{1,4}\s+|\*\*|)(.+?)(?:\*\*|:)?\s*$'
+    )
+    sections: list[tuple[str, list[str]]] = []  # [(heading_text, [bullet_lines])]
+    current_heading: str | None = None
+    current_bullets: list[str] = []
+
+    for raw_line in new_content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        is_heading = (
+            line.startswith('#')
+            or (line.startswith('**') and line.endswith('**') and len(line) > 4)
+        )
+        if is_heading:
+            if current_heading is not None:
+                sections.append((current_heading, current_bullets))
+            m = heading_re.match(line.lstrip('#').strip().strip('*'))
+            current_heading = m.group(1).strip() if m else line.lstrip('#').strip().strip('*')
+            current_bullets = []
+        else:
+            if current_heading is not None:
+                current_bullets.append(line)
+
+    if current_heading is not None:
+        sections.append((current_heading, current_bullets))
+
+    if not sections:
+        # Unstructured output — return originals unchanged
+        return orig_list
+
+    # ── Match and update ────────────────────────────────────────────────
+    updated_titles: set[str] = set()
+    result_map: dict[str, Project] = {p.title: p for p in orig_list}
+
+    for heading, bullets in sections:
+        heading_lower = heading.lower()
+        # Find the best original project match by title substring
+        best_match: Project | None = None
+        for proj in orig_list:
+            if proj.title.lower() in heading_lower or heading_lower in proj.title.lower():
+                best_match = proj
+                break
+
+        description = "\n".join(
+            b.lstrip('-•* ').strip() for b in bullets if b.strip()
+        ).strip()
+
+        if best_match:
+            # Update only description; preserve all other metadata
+            updated = best_match.model_copy(
+                update={"description": description or best_match.description}
+            )
+            result_map[best_match.title] = updated
+            updated_titles.add(best_match.title)
+        # If no match, this is a new project from the optimizer — add it
+        # only if it has a meaningful description so we don't add blank entries
+        elif description:
+            new_proj = Project(title=heading, description=description)
+            result_map[heading] = new_proj
+
+    return list(result_map.values())
+
+
+def _apply_education_proposal(new_content: str, original_education: Any) -> Any:
+    """Merge an LLM-generated education section back onto the original
+    Education objects, preserving college, degree, year and cgpa.
+
+    The optimizer is allowed to add relevant coursework to the description
+    field (we store it in `degree` suffix or ignore it — see strategy below).
+    We NEVER overwrite college, degree, year or cgpa with fabricated content.
+
+    Strategy:
+    - If only one education entry exists and the proposal mentions it,
+      keep the original object unchanged (the only safe action when the
+      prompt returns a plain formatted string).
+    - The optimizer prompt is factual-only, so returning the original
+      unchanged is always safe for education.
+
+    Returns a list of Education model instances.
+    """
+    from app.models.resume import Education
+
+    if not original_education:
+        return []
+
+    edu_list: list = []
+    for e in original_education:
+        if isinstance(e, dict):
+            try:
+                edu_list.append(Education(**e))
+            except Exception:
+                pass
+        elif isinstance(e, Education):
+            edu_list.append(e)
+
+    # Education is factual — return the validated originals unchanged.
+    # The optimizer may have re-ordered or reformatted, but we have no
+    # reliable way to merge free-form text back to structured fields without
+    # risk of data loss.  Keeping originals is always correct.
+    return edu_list if edu_list else original_education
+
+
+def _parse_skills_string(skills_text: str, original_skills: Any) -> Any:
+    """Parse a skills string (produced by the LLM skills optimizer) back into
+    a StructuredSkills object so the ATS engine's schema contract is preserved.
+
+    Expected input format (from the skills prompt):
+        "Languages: Python, Go\nFrameworks: FastAPI, Django\n..."
+
+    Any category label that doesn't match a known StructuredSkills field is
+    placed into 'concepts'.  Skills already present in original_skills but
+    absent from the parsed string are intentionally dropped — the optimizer
+    may legitimately remove weak skills.
+
+    Falls back to the original StructuredSkills if parsing yields nothing
+    recognizable, to avoid silently discarding all skills.
+    """
+    from app.models.resume import StructuredSkills
+
+    KNOWN_CATEGORIES = {
+        # label (lowercased) → StructuredSkills field name
+        "languages": "languages",
+        "language": "languages",
+        "frameworks": "frameworks",
+        "framework": "frameworks",
+        "libraries": "frameworks",
+        "library": "frameworks",
+        "ai/ml": "concepts",
+        "ai": "concepts",
+        "ml": "concepts",
+        "tools": "tools",
+        "tool": "tools",
+        "devops": "tools",
+        "cloud": "tools",
+        "databases": "databases",
+        "database": "databases",
+        "db": "databases",
+        "concepts": "concepts",
+        "concept": "concepts",
+        "other": "concepts",
+    }
+
+    result: Dict[str, list] = {
+        "languages": [], "frameworks": [], "tools": [], "databases": [], "concepts": []
+    }
+    parsed_any = False
+
+    for line in skills_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Expect "Label: skill1, skill2, ..."
+        if ":" in line:
+            label, _, rest = line.partition(":")
+            label_key = label.strip().lower()
+            field = KNOWN_CATEGORIES.get(label_key, "concepts")
+            skills = [s.strip() for s in rest.split(",") if s.strip()]
+            result[field].extend(skills)
+            if skills:
+                parsed_any = True
+
+    if not parsed_any:
+        # LLM returned unstructured text — return the original skills unchanged
+        return original_skills
+
+    return StructuredSkills(
+        languages=result["languages"],
+        frameworks=result["frameworks"],
+        tools=result["tools"],
+        databases=result["databases"],
+        concepts=result["concepts"],
+    )
+
+
 def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
     proposed = state.proposed_changes or {}
     section = state.current_section or "summary"
@@ -501,10 +719,42 @@ def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
     status = (state.approval_state or {}).get(section, "")
 
     if status == "approved" and new_content and isinstance(new_content, str) and not new_content.startswith("⚠️"):
-        if isinstance(optimized, dict):
-            optimized[section] = new_content
+        if section == "skills":
+            # Parse the skills string back into a StructuredSkills model
+            if isinstance(optimized, dict):
+                original_skills = optimized.get("skills")
+                parsed_skills_model = _parse_skills_string(new_content, original_skills)
+                optimized["skills"] = parsed_skills_model.model_dump() if hasattr(parsed_skills_model, "model_dump") else parsed_skills_model
+            else:
+                original_skills = getattr(optimized, "skills", None)
+                optimized.skills = _parse_skills_string(new_content, original_skills)
+
+        elif section == "projects":
+            # Merge optimized Markdown back onto structured Project objects
+            if isinstance(optimized, dict):
+                original_projects = optimized.get("projects", [])
+                merged = _apply_projects_proposal(new_content, original_projects)
+                optimized["projects"] = [p.model_dump() if hasattr(p, "model_dump") else p for p in merged]
+            else:
+                original_projects = getattr(optimized, "projects", [])
+                optimized.projects = _apply_projects_proposal(new_content, original_projects)
+
+        elif section == "education":
+            # Preserve structured Education objects; apply safe factual merge
+            if isinstance(optimized, dict):
+                original_education = optimized.get("education", [])
+                merged = _apply_education_proposal(new_content, original_education)
+                optimized["education"] = [e.model_dump() if hasattr(e, "model_dump") else e for e in merged]
+            else:
+                original_education = getattr(optimized, "education", [])
+                optimized.education = _apply_education_proposal(new_content, original_education)
+
         else:
-            setattr(optimized, section, new_content)
+            # summary, experience, certifications — plain string fields
+            if isinstance(optimized, dict):
+                optimized[section] = new_content
+            else:
+                setattr(optimized, section, new_content)
         
     master_sequence = ["summary", "skills", "experience", "projects", "education", "certifications"]
     

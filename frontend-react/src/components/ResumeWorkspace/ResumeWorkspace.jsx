@@ -16,16 +16,32 @@ function OriginalResumePanel({ threadId }) {
 
     useEffect(() => {
         let mounted = true;
+        let intervalId = null;
+
         const poll = async () => {
             try {
                 const data = await fetchJson(`/original-resume/${threadId}`);
-                if (mounted) setResume(data);
-            } catch (_) {}
-            finally { if (mounted) setLoading(false); }
+                if (mounted) {
+                    setResume(data);
+                    setLoading(false);
+                    // Successfully fetched — stop polling
+                    clearInterval(intervalId);
+                }
+            } catch (err) {
+                // 404 means extraction is still in progress — silent transient retry
+                if (err && err.status === 404) {
+                    return;
+                }
+                // Any other error (500, network failure) is real — log it and stop loading
+                console.error('[OriginalResumePanel] Unexpected error fetching original resume:', err);
+                if (mounted) setLoading(false);
+                clearInterval(intervalId);
+            }
         };
+
         poll();
-        const interval = setInterval(poll, 4000);
-        return () => { mounted = false; clearInterval(interval); };
+        intervalId = setInterval(poll, 4000);
+        return () => { mounted = false; clearInterval(intervalId); };
     }, [threadId]);
 
     const renderSkills = (skills) => {

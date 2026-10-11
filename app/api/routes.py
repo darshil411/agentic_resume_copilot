@@ -262,6 +262,10 @@ async def start_workflow(
 async def get_workflow_metadata(thread_id: str):
     values, is_interrupted, _ = _extract_state(thread_id)
     overall_status = WorkflowStatus.ACTION_REQUIRED if is_interrupted else _get_run_status(thread_id)
+    
+    raw_status = _run_status.get(thread_id, "")
+    error_message = raw_status[6:].strip() if raw_status.startswith("error:") else None
+
     branch_status_dict = values.get("branch_status", {})
 
     def _parse_branch(b_name: str) -> WorkflowStatus:
@@ -292,9 +296,10 @@ async def get_workflow_metadata(thread_id: str):
         active_branches=branches,
         current_review_section=values.get("current_section"),
         completed_sections=[],
-        ats_report=values.get("ats_report"),                       # <-- ADD THIS LINE
+        ats_report=values.get("ats_report"),
         optimized_ats_report=values.get("optimized_ats_report"),
-        workflow_logs=values.get("workflow_logs", [])
+        workflow_logs=values.get("workflow_logs", []),
+        error_message=error_message
     )
 
 @router.get("/resume/task/current/{thread_id}", response_model=ReviewTaskDTO)
