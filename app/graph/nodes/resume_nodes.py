@@ -630,11 +630,85 @@ def _apply_education_proposal(new_content: str, original_education: Any) -> Any:
         elif isinstance(e, Education):
             edu_list.append(e)
 
-    # Education is factual — return the validated originals unchanged.
-    # The optimizer may have re-ordered or reformatted, but we have no
-    # reliable way to merge free-form text back to structured fields without
-    # risk of data loss.  Keeping originals is always correct.
+    # Education is factual — returning the validated originals unchanged
+    # is the safest option. However, when the optimizer produces a clearly
+    # structured set of entries that can be matched to originals we could
+    # merge; that is intentionally out of scope. Keep originals unchanged
+    # to avoid accidental fabrication or loss.
     return edu_list if edu_list else original_education
+
+
+def _apply_experience_proposal(new_content: str, original_experience: Any) -> Any:
+    """Merge an LLM-generated experience section back onto the original
+    Experience objects, preserving company, role, duration and ONLY updating
+    bullets when a heading matches an existing entry.
+
+    If the markdown cannot be parsed or no clear matches are found, return
+    the original list unchanged to avoid corrupting structured data.
+    """
+    from app.models.resume import Experience
+    import re
+
+    if not original_experience:
+        return []
+
+    orig_list: list = []
+    for e in original_experience:
+        if isinstance(e, dict):
+            try:
+                orig_list.append(Experience(**e))
+            except Exception:
+                pass
+        elif isinstance(e, Experience):
+            orig_list.append(e)
+
+    if not orig_list:
+        return original_experience
+
+    # Parse headings and bullets similar to projects parser
+    heading_re = re.compile(r'^(?:#{1,4}\s+|)(.+?)\s*$')
+    sections = []
+    current_heading = None
+    current_bullets = []
+    for raw_line in new_content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        is_heading = line.startswith('#') or (line.endswith(':') and len(line) < 100)
+        if is_heading:
+            if current_heading is not None:
+                sections.append((current_heading, current_bullets))
+            m = heading_re.match(line.lstrip('#').strip().rstrip(':'))
+            current_heading = m.group(1).strip() if m else line
+            current_bullets = []
+        else:
+            if current_heading is not None:
+                current_bullets.append(line)
+
+    if current_heading is not None:
+        sections.append((current_heading, current_bullets))
+
+    if not sections:
+        return orig_list
+
+    result_map = { (e.company or "").lower() + '|' + (e.role or "").lower(): e for e in orig_list }
+
+    for heading, bullets in sections:
+        heading_lower = heading.lower()
+        best_match = None
+        for e in orig_list:
+            composite = (e.company or "").lower() + '|' + (e.role or "").lower()
+            if (e.company and e.company.lower() in heading_lower) or (e.role and e.role.lower() in heading_lower):
+                best_match = e
+                break
+
+        parsed_bullets = [b.lstrip('-•* ').strip() for b in bullets if b.strip()]
+
+        if best_match and parsed_bullets:
+            updated = best_match.model_copy(update={"bullets": parsed_bullets})
+            result_map[(best_match.company or "").lower() + '|' + (best_match.role or "").lower()] = updated
+
+    return list(result_map.values())
 
 
 def _parse_skills_string(skills_text: str, original_skills: Any) -> Any:
@@ -718,6 +792,7 @@ def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
     new_content = proposed.get("new_content")
     status = (state.approval_state or {}).get(section, "")
 
+    logs: list = []
     if status == "approved" and new_content and isinstance(new_content, str) and not new_content.startswith("⚠️"):
         if section == "skills":
             # Parse the skills string back into a StructuredSkills model
@@ -745,16 +820,50 @@ def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
                 original_education = optimized.get("education", [])
                 merged = _apply_education_proposal(new_content, original_education)
                 optimized["education"] = [e.model_dump() if hasattr(e, "model_dump") else e for e in merged]
+                if merged == original_education:
+                    logs.append(f"No changes applied to 'education' (review-only).")
             else:
                 original_education = getattr(optimized, "education", [])
-                optimized.education = _apply_education_proposal(new_content, original_education)
+                merged = _apply_education_proposal(new_content, original_education)
+                optimized.education = merged
+                if merged == original_education:
+                    logs.append(f"No changes applied to 'education' (review-only).")
 
         else:
-            # summary, experience, certifications — plain string fields
-            if isinstance(optimized, dict):
-                optimized[section] = new_content
+            # summary, experience, certifications — handle safely
+            if section == "experience":
+                if isinstance(optimized, dict):
+                    original_experience = optimized.get("experience", [])
+                    merged = _apply_experience_proposal(new_content, original_experience)
+                    optimized["experience"] = [e.model_dump() if hasattr(e, "model_dump") else e for e in merged]
+                    logs.append(f"Applied experience proposal for '{section}'.")
+                else:
+                    original_experience = getattr(optimized, "experience", [])
+                    optimized.experience = _apply_experience_proposal(new_content, original_experience)
+                    logs.append(f"Applied experience proposal for '{section}'.")
+
+            elif section == "certifications":
+                # Expect a list of certification names; parse LLM output into lines
+                lines = [l.strip() for l in new_content.splitlines() if l.strip()]
+                certs = []
+                for l in lines:
+                    # Allow comma-separated inline lists
+                    if "," in l:
+                        certs.extend([p.strip() for p in l.split(",") if p.strip()])
+                    else:
+                        certs.append(l)
+                if isinstance(optimized, dict):
+                    optimized["certifications"] = certs
+                else:
+                    setattr(optimized, "certifications", certs)
+                logs.append(f"Updated certifications for '{section}'.")
+
             else:
-                setattr(optimized, section, new_content)
+                # summary and other plain-string fields: allowed
+                if isinstance(optimized, dict):
+                    optimized[section] = new_content
+                else:
+                    setattr(optimized, section, new_content)
         
     master_sequence = ["summary", "skills", "experience", "projects", "education", "certifications"]
     
@@ -773,9 +882,11 @@ def commit_changes_node(state: GlobalGraphState) -> Dict[str, Any]:
             next_section = candidate
             break
         
+    # Default commit log
+    logs.append(f"Committed changes for '{section}', advancing to '{next_section}'")
     return {
         "optimized_resume": optimized,
         "current_section": next_section,
         "proposed_changes": {}, 
-        "workflow_logs": [f"Committed changes for '{section}', advancing to '{next_section}'"]
+        "workflow_logs": logs
     }

@@ -13,38 +13,53 @@ from app.utils.llm_factory import get_llm
 
 
 def _build_fallback_resume(resume_text: str) -> StructuredResume:
+    # Conservative fallback: do NOT invent candidate credentials.
+    # Extract minimal, directly observed tokens from the raw text and
+    # populate only non-fabricated fields. Leave projects/experience/
+    # education/certifications empty so we don't accidentally attribute
+    # false accomplishments to the candidate.
     lines = [line.strip() for line in resume_text.splitlines() if line.strip()]
-    name = lines[0] if lines else "Candidate"
-    summary = "Experienced backend engineer with a strong focus on Python, APIs, and AI-enabled systems."
-    normalized = re.sub(r"\s+", " ", resume_text.lower())
-    skills = []
-    if "python" in normalized:
-        skills.append("Python")
-    if "fastapi" in normalized:
-        skills.append("FastAPI")
-    if "langgraph" in normalized:
-        skills.append("LangGraph")
-    if "api" in normalized:
-        skills.append("APIs")
-    if "sql" in normalized:
-        skills.append("SQL")
-    if not skills:
-        skills = ["Python", "FastAPI", "APIs"]
+    name = lines[0] if lines else None
 
+    # Build a very short summary from the first non-empty lines but avoid
+    # making factual claims about experience or roles.
+    summary = " ".join(lines[:2]) if lines else None
+
+    normalized = re.sub(r"\s+", " ", resume_text.lower())
+
+    # Derive probable skills only when they appear verbatim in the text.
+    languages = []
+    frameworks = []
+    tools = []
+    databases = []
+    concepts = []
+
+    if "python" in normalized:
+        languages.append("Python")
+    if "fastapi" in normalized:
+        frameworks.append("FastAPI")
+    if "langgraph" in normalized:
+        concepts.append("LangGraph")
+    if "docker" in normalized:
+        tools.append("Docker")
+    if "sql" in normalized or "postgres" in normalized or "postgresql" in normalized:
+        databases.append("PostgreSQL")
+
+    # Do not fabricate projects, experience, education, or certifications.
     return StructuredResume(
         name=name,
         summary=summary,
         skills=StructuredSkills(
-            languages=["Python"],
-            frameworks=["FastAPI"],
-            tools=["Git", "Docker"],
-            databases=["PostgreSQL"],
-            concepts=["APIs", "Async Programming"],
+            languages=languages,
+            frameworks=frameworks,
+            tools=tools,
+            databases=databases,
+            concepts=concepts,
         ),
-        projects=[Project(title="AI Resume Copilot", description="Built an AI-assisted resume optimization workflow.", tech_stack=["Python", "FastAPI"])],
-        experience=[Experience(company="Example Company", role="Software Engineer", bullets=["Built backend services.", "Worked with APIs and data pipelines."])],
-        education=[Education(college="Example University", degree="B.Tech", year="2020")],
-        certifications=["AWS Cloud Practitioner"],
+        projects=[],
+        experience=[],
+        education=[],
+        certifications=[],
     )
 
 

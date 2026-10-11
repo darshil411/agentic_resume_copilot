@@ -33,7 +33,20 @@ def build_main_graph(checkpointer=None) -> StateGraph:
     builder.add_node("resume_subgraph", resume_app)
     
     def final_dashboard_node(state: GlobalGraphState):
-        return {"workflow_logs": ["All workflow steps completed successfully."]}
+        from app.api.dtos.enums import WorkflowStatus
+
+        # Determine if final ATS was produced — if not, mark the resume branch
+        # as FAILED to avoid signaling a falsely successful workflow.
+        logs = ["Final dashboard reached."]
+        branch_updates = {}
+        if getattr(state, "optimized_ats_report", None):
+            branch_updates["resume_branch"] = WorkflowStatus.COMPLETED
+            logs.append("Resume branch completed with final ATS report.")
+        else:
+            branch_updates["resume_branch"] = WorkflowStatus.FAILED
+            logs.append("Resume branch did not complete final ATS evaluation; marking as FAILED.")
+
+        return {"workflow_logs": logs, "branch_status": branch_updates}
     builder.add_node("final_dashboard_node", final_dashboard_node)
     
     # --- EDGES ---

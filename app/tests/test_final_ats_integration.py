@@ -8,11 +8,6 @@ from unittest.mock import MagicMock, patch
 
 def test_commit_changes_skills_dict_representation():
     """Verify commit_changes_node handles dict optimized_resume properly."""
-    
-    # Simulate the resume as a dict, as it might be loaded from SQLite checkpoint
-def test_commit_changes_skills_dict_representation():
-    """Verify commit_changes_node handles dict optimized_resume properly."""
-    
     optimized_resume = {
         "name": "Candidate",
         "skills": {

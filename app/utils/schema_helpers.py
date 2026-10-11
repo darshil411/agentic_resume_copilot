@@ -24,12 +24,18 @@ def _coerce_list_field(value: Any, model_cls: Any, field_name: str) -> list:
     if value is None:
         return []
     if isinstance(value, str):
-        logger.warning(
-            "enforce_resume_schema: field '%s' was a string (schema corruption). "
-            "Substituting empty list. Fix commit_changes_node if this persists.",
-            field_name,
-        )
-        return []
+        # Attempt to recover from simple JSON or newline-serialized lists.
+        try:
+            import json
+            parsed = json.loads(value)
+            value = parsed
+        except Exception:
+            # Not JSON — avoid silently discarding potentially meaningful
+            # content. Raise so callers can route to a schema-recovery path
+            # instead of losing data.
+            raise TypeError(
+                f"enforce_resume_schema: field '{field_name}' is a raw string and cannot be coerced safely."
+            )
     if isinstance(value, list):
         coerced = []
         for item in value:
@@ -62,6 +68,16 @@ def _coerce_skills(value: Any) -> StructuredSkills:
         return value
     if isinstance(value, dict):
         return StructuredSkills(**value)
+    if isinstance(value, str):
+        # Try JSON decode; else raise to signal an explicit recovery path
+        try:
+            import json
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return StructuredSkills(**parsed)
+        except Exception:
+            raise TypeError("enforce_resume_schema: skills field is a raw string and cannot be coerced safely.")
+
     logger.warning(
         "enforce_resume_schema: skills field had unexpected type %s; using empty StructuredSkills.",
         type(value),
